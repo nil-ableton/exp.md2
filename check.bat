@@ -12,10 +12,14 @@ if not exist "%OutputDir%" mkdir "%OutputDir%"
 if not exist "%ObjDir%" mkdir "%ObjDir%"
 if %errorlevel% neq 0 exit /b 1
 
-set CLCommonFlags=-nologo -Z7 -W1 -wd4244 -wd4267 -wd4204 -wd4201
+set CLCommonFlags=-nologo -W4 -WX -Zs -wd4204
 
 REM Actual Check
 REM ============
-echo NONE
+%CLExe% %HereDir%/libs/xxxx_buf.c ^
+  %CLCommonFlags%
+
+%CLExe% %HereDir%/libs/xxxx_map.c ^
+  %CLCommonFlags%
 
 echo off

@@ -16,6 +16,12 @@ set CLCommonFlags=-nologo -Z7 -W1 -wd4244 -wd4267 -wd4204 -wd4201
 
 REM Actual Build
 REM ============
-echo NONE
+
+set O="%OutputDir%"\md2.exe
+"%CLExe%" "%HereDir%\md2_unit.c" /Fe:"%O%" ^
+  /Fo:"%ObjDir%"\ ^
+  %CLCommonFlags%
+if %errorlevel% neq 0 exit /b 1
+echo PROGRAM    %O%
 
 echo off
