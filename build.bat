@@ -12,7 +12,7 @@ if not exist "%OutputDir%" mkdir "%OutputDir%"
 if not exist "%ObjDir%" mkdir "%ObjDir%"
 if %errorlevel% neq 0 exit /b 1
 
-set CLCommonFlags=-nologo -Z7 -W1 -wd4244 -wd4267 -wd4204 -wd4201
+set CLCommonFlags=-nologo -Z7 -W3 -wd4244 -wd4267 -wd4204 -wd4201 -D_CRT_SECURE_NO_WARNINGS
 
 REM Actual Build
 REM ============

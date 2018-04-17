@@ -38,7 +38,7 @@ void* buf__grow(void* buf, size_t element_n, size_t element_size);
 #define buf_len(b__) (buf__isnull(b__) ? 0 : (buf__hdr(b__)->len))
 #define buf_end(b__) (buf__isnull(b__) ? NULL : ((&(b__)[0]) + buf_len(b__)))
 #define buf_push(b__, ...)                                                               \
-  (buf_fit(b__, sizeof b__[0]), (b__[buf_len(b__)] = __VA_ARGS__), buf__hdr(b__)->len++)
+  (buf_fit(b__, 1), (b__[buf_len(b__)] = __VA_ARGS__), buf__hdr(b__)->len++)
 #define buf_printf(b__, ...) buf__assign(b__, buf__printf((b__), __VA_ARGS__))
 
 #endif

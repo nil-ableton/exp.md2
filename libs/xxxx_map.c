@@ -108,6 +108,29 @@ void map_put(Map* map, uint64_t key, void* data)
     else if (map->keys[index] == key)
     {
       map->ptrs[index] = data;
+      return;
+    }
+    index++;
+  } while (index != last);
+  assert(0);
+  exit(1);
+}
+
+void map_remove(Map* map, uint64_t key)
+{
+  if (!key)
+    return;
+  assert(is_pow2_uint64(map->cap));
+  size_t index = hash_uint64(key);
+  size_t last = index;
+  do
+  {
+    index &= map->cap - 1;
+    if (map->keys[index] == key)
+    {
+      map->keys[index] = 0;
+      map->len--;
+      return;
     }
     index++;
   } while (index != last);
@@ -131,11 +154,20 @@ int test_map(int argc, char const** argv)
 
   assert(strcmp("hello", map_get(&map, 6)) == 0);
   assert(strcmp("world", map_get(&map, 7)) == 0);
+  assert(2 == map.len);
+
+  map_put(&map, 7, "sekai");
+  assert(strcmp("sekai", map_get(&map, 7)) == 0);
+  assert(2 == map.len);
+
+  map_remove(&map, 7);
+  assert(1 == map.len);
 
   // test that it grows
   size_t old_cap = map.cap;
-  for (; old_cap == map.cap; map_put(&map, 6, "grow-me"))
+  for (size_t next_id = 6; old_cap == map.cap; map_put(&map, next_id++, "grow-me"))
     ;
+
 
   return 0;
 }

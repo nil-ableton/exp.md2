@@ -22,4 +22,7 @@ REM ============
 %CLExe% %HereDir%/libs/xxxx_map.c ^
   %CLCommonFlags%
 
+%CLExe% %HereDir%/libs/xxxx_iobuffer.c ^
+  %CLCommonFlags% -D_CRT_SECURE_NO_WARNINGS
+
 echo off

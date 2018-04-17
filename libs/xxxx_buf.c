@@ -87,5 +87,11 @@ int test_buf(int argc, char const** argv)
 
   buf_free(b);
   assert(b == NULL);
+
+  double* fbuf = NULL;
+  buf_push(fbuf, 3.141592);
+  assert(buf_len(fbuf) == 1);
+  assert(buf_cap(fbuf) == 1);
+
   return 0;
 }

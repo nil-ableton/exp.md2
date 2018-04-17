@@ -1,3 +1,6 @@
+#ifndef MAP
+#define MAP
+
 /* hashtable */
 
 #include <stddef.h>
@@ -11,13 +14,15 @@ typedef struct Map
   size_t len;
 } Map;
 
-void map_grow(Map* ht, size_t size);
+void map_grow(Map* map, size_t size);
 
 // returns value at key
-void* map_get(Map* ht, uint64_t key);
+void* map_get(Map* map, uint64_t key);
 
 // grows the map if necessary
-void map_put(Map* ht, uint64_t key, void* data);
+void map_put(Map* map, uint64_t key, void* data);
+
+void map_remove(Map* map, uint64_t key);
 
 static inline uint64_t hash_uint64(uint64_t x)
 {
@@ -42,3 +47,5 @@ uint64_t hash_ptr(void* ptr)
 {
   return hash_uint64((uintptr_t)ptr);
 }
+
+#endif
