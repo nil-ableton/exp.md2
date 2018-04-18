@@ -21,6 +21,7 @@ typedef struct BufHeader
 
 char* buf__printf(char* b, char const* fmt, ...);
 void* buf__grow(void* buf, size_t element_n, size_t element_size);
+void buf__free(void* buf);
 
 #define buf__cast(type__, x__) ((type__)x__)
 #define buf__hdr(b__)                                                                    \

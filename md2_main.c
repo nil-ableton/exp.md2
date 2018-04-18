@@ -1,8 +1,21 @@
 #include "md1_support.h"
+#include "md2_ui.h"
+
 
 #include "libs/xxxx_buf.h"
 #include "libs/xxxx_iobuffer.h"
 #include "libs/xxxx_map.h"
+#include "libs/xxxx_mu.h"
+
+#if defined(_WIN32)
+#include "libs/xxxx_mu_win32.h"
+#endif
+
+#include "deps/gl.h"
+#define NANOVG_GL3_IMPLEMENTATION
+#include "deps/nanovg/src/nanovg.h"
+#include "deps/nanovg/src/nanovg_gl.h"
+
 
 #include <assert.h>
 #include <stdarg.h>
@@ -14,6 +27,7 @@ int test_buf(int, char const**);
 int test_map(int, char const**);
 int test_iobuffer(int, char const**);
 int test_serialisation(int argc, char const** argv);
+int test_ui(int, char const**);
 
 static printf_line(int indent, char const* fmt, ...)
 {
@@ -121,12 +135,198 @@ int test_main(int argc, char const* argv[])
   return 0;
 }
 
+static void md2_fatal(char const* fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  printf("ERROR: ");
+  vprintf(fmt, args);
+  printf("\n");
+  va_end(args);
+  assert(0);
+  exit(1);
+}
+
+typedef struct WindowMetrics
+{
+  float device_px_per_ref_points;
+  struct Mu_Int2 window_size;
+  float dpi;
+} WindowMetrics;
+
+static WindowMetrics get_window_metrics(struct Mu* mu)
+{
+  WindowMetrics metrics = {
+    .device_px_per_ref_points = 1.0f,
+    .window_size = mu->window.size,
+    .dpi = 96.0,
+  };
+#if defined(_WIN32)
+  UINT Dpi = GetDpiForWindow(mu->win32->window);
+  metrics.device_px_per_ref_points = Dpi / 96.0;
+  metrics.dpi = Dpi;
+#endif
+  return metrics;
+}
+
+static char* str_dup_range(char* f, char* l)
+{
+  char* r = calloc(1, l - f + 1);
+  memcpy(&r[0], &f[0], l - f);
+  r[l - f] = '\0';
+  return r;
+}
+
+static char* get_exe_dir()
+{
+#if defined(_WIN32)
+  char* buffer = NULL;
+  char* buffer_l = NULL;
+  buf_fit(buffer, MAX_PATH);
+  while (1)
+  {
+    DWORD size = GetModuleFileNameA(NULL, buffer, buf_cap(buffer));
+    if (GetLastError() == ERROR_INSUFFICIENT_BUFFER || size == 0)
+    {
+      buf_fit(buffer, 256);
+    }
+    else
+    {
+      buffer_l = buffer + size;
+      break;
+    }
+  }
+  assert(*buffer_l == 0);
+  char* last_dir_separator = NULL;
+  for (char* buffer_i = buffer_l; buffer_i > buffer; buffer_i--)
+  {
+    if (buffer_i[-1] == '\\')
+    {
+      last_dir_separator = &buffer_i[-1];
+      break;
+    }
+  }
+  if (!last_dir_separator)
+    md2_fatal("can't get installation directory");
+  char* result = str_dup_range(buffer, last_dir_separator);
+  buf_free(buffer);
+  return result;
+#else
+#error Implement me
+#endif
+}
+
+void load_fonts(NVGcontext* vg)
+{
+  char* exe_dir = get_exe_dir();
+  {
+    char* path = NULL;
+    buf_printf(path, "%s/assets/Inter-UI-Regular.ttf", exe_dir);
+
+    if (nvgCreateFont(vg, "fallback", path) == -1)
+      md2_fatal("could not load fallback font: %s\n", path);
+    buf_free(path), path = NULL;
+  }
+  free(exe_dir), exe_dir = NULL;
+}
+
+
 int main(int argc, char const* argv[])
 {
+// @todo @platform{win32}
+#if defined(_WIN32)
+  SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+#endif
+
   test_buf(argc, argv);
   test_map(argc, argv);
   test_iobuffer(argc, argv);
   test_serialisation(argc, argv);
   test_main(argc, argv);
+  test_ui(argc, argv);
+
+  for (char const **arg = &argv[0], **argl = &argv[argc]; arg != argl;)
+  {
+    if (0 == strcmp(*arg, "--quit"))
+    {
+      exit(0);
+    }
+    arg++;
+  }
+
+  struct Mu mu = {
+    .window.title = "Minidaw2",
+  };
+  if (!Mu_Initialize(&mu))
+    md2_fatal("Init: %s", mu.error);
+
+  if (!gladLoadGL())
+    md2_fatal("Init: GL loader");
+
+  MD2_UserInterface ui = {
+    .mu = &mu,
+    .vg = nvgCreateGL3(NVG_ANTIALIAS | NVG_STENCIL_STROKES),
+    .overlay_vg = nvgCreateGL3(NVG_ANTIALIAS | NVG_STENCIL_STROKES),
+  };
+  if (!ui.vg || !ui.overlay_vg)
+    md2_fatal("Init: NanoVG");
+
+  {
+    struct NVGcontext* vg_all[] = {
+      ui.vg,
+      ui.overlay_vg,
+    };
+    size_t vg_all_n = sizeof vg_all / sizeof vg_all[0];
+    for (struct NVGcontext **vg_i = &vg_all[0], **vg_l = &vg_all[vg_all_n]; vg_i < vg_l;
+         vg_i++)
+    {
+      load_fonts(
+        *vg_i); // @todo @performance wasted due to multiple loading of th same font?
+    }
+  }
+
+  bool is_first_frame = true;
+  while (Mu_Push(&mu), Mu_Pull(&mu))
+  {
+    float px_ratio = get_window_metrics(&mu).device_px_per_ref_points;
+    glViewport(0, 0, mu.window.size.x, mu.window.size.y);
+    glClearColor(0.5f, 0.0f, 1.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    NVGcontext* vg = ui.vg;
+
+    float vg_width = mu.window.size.x / px_ratio;
+    float vg_height = mu.window.size.y / px_ratio;
+
+    nvgBeginFrame(ui.overlay_vg, vg_width, vg_height, px_ratio);
+    nvgBeginFrame(vg, vg_width, vg_height, px_ratio);
+    {
+      nvgBeginPath(vg);
+      nvgRect(vg, 100, 100, 120, 30);
+      nvgCircle(vg, 120, 120, 5);
+      nvgPathWinding(vg, NVG_HOLE); // Mark circle as a hole.
+      nvgFillColor(vg, nvgRGBA(255, 192, 0, 255));
+      nvgFill(vg);
+
+      nvgFontFace(vg, "fallback");
+      nvgFontSize(vg, 16);
+      char* text = NULL;
+      buf_printf(
+        text, "hello, world %d %d %f", mu.window.size.x, mu.window.size.y, px_ratio);
+      nvgText(vg, 100, 100, text, NULL);
+      buf_free(text), text = NULL;
+
+      nvgFontFace(ui.overlay_vg, "fallback");
+      nvgFontSize(ui.overlay_vg, 24);
+      nvgText(ui.overlay_vg, mu.mouse.position.x / px_ratio,
+              mu.mouse.position.y / px_ratio, "hello from (drag-image) overlay", NULL);
+    }
+
+    // render stack:
+    nvgEndFrame(vg);
+    nvgEndFrame(ui.overlay_vg);
+
+    is_first_frame = false;
+  }
+
   return 0;
 }

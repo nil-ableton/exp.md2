@@ -67,7 +67,7 @@ void map_grow(Map* map, size_t size)
 // returns value at key
 void* map_get(Map* map, uint64_t key)
 {
-  assert(map->cap - map->len >= map->len);
+  assert(map->cap >= map->len);
 
   size_t index = hash_uint64(key);
   size_t rest = map->len;

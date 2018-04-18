@@ -1,3 +1,5 @@
+#include "md2_serialisation.h"
+
 #include "libs/xxxx_iobuffer.h"
 
 #include <assert.h>

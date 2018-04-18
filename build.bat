@@ -12,16 +12,22 @@ if not exist "%OutputDir%" mkdir "%OutputDir%"
 if not exist "%ObjDir%" mkdir "%ObjDir%"
 if %errorlevel% neq 0 exit /b 1
 
-set CLCommonFlags=-nologo -Z7 -W3 -wd4244 -wd4267 -wd4204 -wd4201 -D_CRT_SECURE_NO_WARNINGS
+set CLCommonFlags=-nologo -Z7 -W3 -wd4244 -wd4267 -wd4204 -wd4201 -D_CRT_SECURE_NO_WARNINGS -Fo:"%ObjDir%"\
 
 REM Actual Build
 REM ============
 
-set O="%OutputDir%"\md2.exe
-"%CLExe%" "%HereDir%\md2_unit.c" /Fe:"%O%" ^
-  /Fo:"%ObjDir%"\ ^
+set O="%ObjDir%\md2_cpp_unit.obj
+"%CLExe%" "-I%HereDir%\libs" "%HereDir%\md2_cpp_unit.cpp" -c ^
   %CLCommonFlags%
 if %errorlevel% neq 0 exit /b 1
+
+set O="%OutputDir%"\md2.exe
+"%CLExe%" -Fe:"%O%" %CLCommonFlags% "%HereDir%\md2_unit.c" %ObjDir%\md2_cpp_unit.obj ^
+  "-I%HereDir%\deps\glad\include"
+if %errorlevel% neq 0 exit /b 1
 echo PROGRAM    %O%
+
+xcopy /y /s "%HereDir%\assets" "%OutputDir%"\assets\
 
 echo off

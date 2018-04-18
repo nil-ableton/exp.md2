@@ -1,10 +1,13 @@
 #include "md1_support.h"
 
+#include "md2_serialisation.h"
+
 #include "libs/xxxx_buf.h"
 #include "libs/xxxx_iobuffer.h"
 
 #include <limits.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 static bool loader_error(MD1_Loader* loader, char* fmt, ...)
