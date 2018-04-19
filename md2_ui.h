@@ -8,6 +8,11 @@ typedef struct MD2_Point2
   float x, y;
 } MD2_Point2;
 
+typedef struct MD2_Vec2
+{
+  float x, y;
+} MD2_Vec2;
+
 typedef struct MD2_Rect2
 {
   float x0, y0, x1, y1;
@@ -18,14 +23,34 @@ struct NVGcontext;
 
 typedef struct MD2_UserInterface
 {
+  // User supplied on update:
+  MD2_Vec2 size;
+  float pixel_ratio;
+
+  MD2_Point2 pointer_position;
+  MD2_Rect2 bounds;
+  bool frame_started;
+  uint64_t hot_element;
+  uint64_t active_element;
+  struct Map* elements_map;
+
   struct Mu* mu;                 // input & low-level output
   struct NVGcontext* vg;         // nvg canvas
   struct NVGcontext* overlay_vg; // overlay for drag images
-  uint64_t hot_element;
-  uint64_t active_element;
-
-  struct Map* elements_map;
 } MD2_UserInterface;
+
+typedef struct MD2_RenderingOptions
+{
+  int layer_index;
+} MD2_RenderingOptions;
+
+void md2_ui_textf(
+  MD2_UserInterface* ui, MD2_RenderingOptions options, MD2_Rect2 rect, char* fmt, ...);
+void md2_ui_vtextf(MD2_UserInterface* ui,
+                   MD2_RenderingOptions options,
+                   MD2_Rect2 rect,
+                   char* fmt,
+                   va_list args);
 
 typedef struct MD2_ElementAllocator
 {
@@ -38,6 +63,8 @@ typedef struct MD2_ElementAllocator
     MD2_ElementAllocator_InChild,
   } state;
 } MD2_ElementAllocator;
+
+void md2_ui_update(MD2_UserInterface* ui);
 
 void* md2_ui_alloc(size_t size);
 void md2_ui_free(void* ptr);
@@ -75,6 +102,11 @@ static inline MD2_Rect2 rect_make(MD2_Point2 a, MD2_Point2 b)
                      .y1 = max_f(a.y, b.y)};
 }
 
+static inline MD2_Rect2 rect_make_point_size(MD2_Point2 point, MD2_Vec2 size)
+{
+  return rect_make(point, (MD2_Point2){point.x + size.x, point.y + size.y});
+}
+
 static inline MD2_Point2 rect_min_point(MD2_Rect2 aabb2)
 {
   return (MD2_Point2){.x = aabb2.x0, .y = aabb2.y0};
@@ -90,6 +122,19 @@ static inline bool rect_intersects(MD2_Rect2 aabb2, MD2_Point2 point)
   if (point.x < aabb2.x0 || point.x >= aabb2.y1)
     return false;
   if (point.y < aabb2.y0 || point.y >= aabb2.y1)
+    return false;
+  return true;
+}
+
+static inline bool rects_intersect(MD2_Rect2 a, MD2_Rect2 b)
+{
+  if (b.x0 >= a.x1)
+    return false;
+  if (a.x0 >= b.x1)
+    return false;
+  if (b.y0 >= a.y1)
+    return false;
+  if (a.y0 >= b.y1)
     return false;
   return true;
 }

@@ -3,6 +3,8 @@
 #include "md2_serialisation.c"
 #include "md2_ui.c"
 
+#include "md2_posix.c" // platform support, comes last
+
 #include "deps/glad/src/glad.c"
 #include "deps/nanovg/src/nanovg.c"
 

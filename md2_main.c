@@ -1,6 +1,6 @@
 #include "md1_support.h"
+#include "md2_posix.h"
 #include "md2_ui.h"
-
 
 #include "libs/xxxx_buf.h"
 #include "libs/xxxx_iobuffer.h"
@@ -230,7 +230,6 @@ void load_fonts(NVGcontext* vg)
   free(exe_dir), exe_dir = NULL;
 }
 
-
 int main(int argc, char const* argv[])
 {
 // @todo @platform{win32}
@@ -245,13 +244,25 @@ int main(int argc, char const* argv[])
   test_main(argc, argv);
   test_ui(argc, argv);
 
+  char const* user_library_path = "";
   for (char const **arg = &argv[0], **argl = &argv[argc]; arg != argl;)
   {
     if (0 == strcmp(*arg, "--quit"))
     {
       exit(0);
     }
+    else if (0 == strcmp(*arg, "--user-library"))
+    {
+      arg++;
+      user_library_path = *arg;
+    }
     arg++;
+  }
+
+  if (!posix_is_dir(user_library_path))
+  {
+    md2_fatal("--user-library <dir> expected (%s not recognized as directory)",
+              user_library_path);
   }
 
   struct Mu mu = {
@@ -292,14 +303,24 @@ int main(int argc, char const* argv[])
     glViewport(0, 0, mu.window.size.x, mu.window.size.y);
     glClearColor(0.5f, 0.0f, 1.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+    ui.mu = &mu;
+    ui.pixel_ratio = px_ratio;
+    ui.size = (MD2_Vec2){
+      .x = mu.window.size.x / ui.pixel_ratio, .y = mu.window.size.y / ui.pixel_ratio};
+    md2_ui_update(&ui);
+
     NVGcontext* vg = ui.vg;
-
-    float vg_width = mu.window.size.x / px_ratio;
-    float vg_height = mu.window.size.y / px_ratio;
-
-    nvgBeginFrame(ui.overlay_vg, vg_width, vg_height, px_ratio);
-    nvgBeginFrame(vg, vg_width, vg_height, px_ratio);
     {
+      nvgFontFace(vg, "fallback");
+      nvgFontSize(vg, 16);
+      nvgFillColor(vg, nvgRGBA(255, 192, 0, 255));
+      md2_ui_textf(&ui, (MD2_RenderingOptions){.layer_index = 1},
+                   (MD2_Rect2){.x0 = 20, .y1 = 20}, "User Library %s%s",
+                   user_library_path,
+                   !posix_is_dir(user_library_path) ? " (offline)" : "");
+
+
       nvgBeginPath(vg);
       nvgRect(vg, 100, 100, 120, 30);
       nvgCircle(vg, 120, 120, 5);
@@ -309,22 +330,16 @@ int main(int argc, char const* argv[])
 
       nvgFontFace(vg, "fallback");
       nvgFontSize(vg, 16);
-      char* text = NULL;
-      buf_printf(
-        text, "hello, world %d %d %f", mu.window.size.x, mu.window.size.y, px_ratio);
-      nvgText(vg, 100, 100, text, NULL);
-      buf_free(text), text = NULL;
+      md2_ui_textf(&ui, (MD2_RenderingOptions){.layer_index = 0},
+                   (MD2_Rect2){.x0 = 100, .y1 = 100}, "hello, world %d %d %f",
+                   mu.window.size.x, mu.window.size.y, px_ratio);
 
       nvgFontFace(ui.overlay_vg, "fallback");
       nvgFontSize(ui.overlay_vg, 24);
-      nvgText(ui.overlay_vg, mu.mouse.position.x / px_ratio,
-              mu.mouse.position.y / px_ratio, "hello from (drag-image) overlay", NULL);
+      md2_ui_textf(&ui, (MD2_RenderingOptions){.layer_index = 1},
+                   (MD2_Rect2){.x0 = ui.pointer_position.x, .y1 = ui.pointer_position.y},
+                   "hello from (drag-image) overlay");
     }
-
-    // render stack:
-    nvgEndFrame(vg);
-    nvgEndFrame(ui.overlay_vg);
-
     is_first_frame = false;
   }
 

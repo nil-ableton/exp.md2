@@ -2,6 +2,7 @@
 #define XXXX_BUF
 
 #include <assert.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -20,6 +21,7 @@ typedef struct BufHeader
 } BufHeader;
 
 char* buf__printf(char* b, char const* fmt, ...);
+char* buf__vprintf(char* b, char const* fmt, va_list args);
 void* buf__grow(void* buf, size_t element_n, size_t element_size);
 void buf__free(void* buf);
 
@@ -41,5 +43,6 @@ void buf__free(void* buf);
 #define buf_push(b__, ...)                                                               \
   (buf_fit(b__, 1), (b__[buf_len(b__)] = __VA_ARGS__), buf__hdr(b__)->len++)
 #define buf_printf(b__, ...) buf__assign(b__, buf__printf((b__), __VA_ARGS__))
+#define buf_vprintf(b__, ...) buf__assign(b__, buf__vprintf((b__), __VA_ARGS__))
 
 #endif
