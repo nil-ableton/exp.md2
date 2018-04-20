@@ -20,24 +20,27 @@ void* buf__grow(void* buf, size_t element_n, size_t element_size)
   if (buf)
     old_cap = buf__hdr(buf)->cap, old_len = buf__hdr(buf)->len;
   size_t needed_cap = old_len + element_n;
-  size_t next_cap = 1 + 2 * old_cap;
-  size_t new_cap = needed_cap < next_cap ? next_cap : needed_cap;
-  if (new_cap > old_cap)
+  if (needed_cap > old_cap)
   {
-    size_t needed_size = new_cap * element_size + offsetof(struct BufHeader, bytes);
-    char* memory = (char*)(buf ? buf__hdr(buf) : NULL);
-    memory = realloc(memory, needed_size);
-    BufHeader* new_header = (BufHeader*)memory;
-    if (buf == NULL)
+    size_t next_cap = 1 + 2 * old_cap;
+    size_t new_cap = needed_cap < next_cap ? next_cap : needed_cap;
+    if (new_cap > old_cap)
     {
-      new_header->magic = BufHeader_Magic;
-      new_header->element_size = element_size;
-      new_header->len = 0;
+      size_t needed_size = new_cap * element_size + offsetof(struct BufHeader, bytes);
+      char* memory = (char*)(buf ? buf__hdr(buf) : NULL);
+      memory = realloc(memory, needed_size);
+      BufHeader* new_header = (BufHeader*)memory;
+      if (buf == NULL)
+      {
+        new_header->magic = BufHeader_Magic;
+        new_header->element_size = element_size;
+        new_header->len = 0;
+      }
+      assert(new_header->magic == BufHeader_Magic);
+      assert(new_header->element_size == element_size);
+      new_header->cap = new_cap;
+      buf = memory + offsetof(struct BufHeader, bytes);
     }
-    assert(new_header->magic == BufHeader_Magic);
-    assert(new_header->element_size == element_size);
-    new_header->cap = new_cap;
-    buf = memory + offsetof(struct BufHeader, bytes);
   }
   return buf;
 }
@@ -100,6 +103,17 @@ int test_buf(int argc, char const** argv)
   buf_push(fbuf, 3.141592);
   assert(buf_len(fbuf) == 1);
   assert(buf_cap(fbuf) == 1);
+
+  buf_reset(fbuf);
+  assert(buf_len(fbuf) == 0);
+  assert(buf_cap(fbuf) == 1);
+
+  buf_push(fbuf, 3);
+  buf_push(fbuf, 1);
+  buf_push(fbuf, 4);
+  assert(buf_len(fbuf) == 3);
+  buf_truncate(fbuf, 1);
+  assert(buf_len(fbuf) == 1);
 
   return 0;
 }

@@ -4,34 +4,38 @@
  * @platform: win32
  */
 
-enum {
-     MU_CTRL = 0x11,  // VK_CONTROL
-     MU_ALT = 0x12,   // VK_MENU
-     MU_SHIFT = 0x10, // VK_SHIFT
+enum
+{
+  MU_CTRL = 0x11,     // VK_CONTROL
+  MU_ALT = 0x12,      // VK_MENU
+  MU_SHIFT = 0x10,    // VK_SHIFT
+  MU_PAGEUP = 0x21,   // VK_PRIOR
+  MU_PAGEDOWN = 0x22, // VK_NEXT
 };
 
-typedef void *HANDLE;
+typedef void* HANDLE;
 typedef struct _XINPUT_STATE XINPUT_STATE;
-typedef unsigned long(__stdcall *XINPUTGETSTATE)(unsigned long dwUserIndex,
-                                                 XINPUT_STATE *pState);
+typedef unsigned long(__stdcall* XINPUTGETSTATE)(unsigned long dwUserIndex,
+                                                 XINPUT_STATE* pState);
 
 struct IAudioClient;
 struct IAudioRenderClient;
 
-struct Mu_Win32 {
-    HANDLE window;
-    HANDLE device_context;
+struct Mu_Win32
+{
+  HANDLE window;
+  HANDLE device_context;
 
-    void *main_fiber;
-    void *message_fiber;
+  void* main_fiber;
+  void* message_fiber;
 
-    XINPUTGETSTATE xinput_get_state;
+  XINPUTGETSTATE xinput_get_state;
 
-    struct IAudioClient *audio_client;
-    struct IAudioRenderClient *audio_render_client;
+  struct IAudioClient* audio_client;
+  struct IAudioRenderClient* audio_render_client;
 
-    HANDLE wgl_context;
-    struct ID3D11Device *d3d11_device;
-    struct ID3D11DeviceContext *d3d11_device_context;
-    struct IDXGISwapChain* dxgi_swap_chain;
+  HANDLE wgl_context;
+  struct ID3D11Device* d3d11_device;
+  struct ID3D11DeviceContext* d3d11_device_context;
+  struct IDXGISwapChain* dxgi_swap_chain;
 };

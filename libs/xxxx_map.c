@@ -64,6 +64,12 @@ void map_grow(Map* map, size_t size)
   *map = new_map;
 }
 
+void map_free(Map* map)
+{
+  free(map->keys), map->keys = NULL;
+  free(map->ptrs), map->ptrs = NULL;
+}
+
 // returns value at key
 void* map_get(Map* map, uint64_t key)
 {

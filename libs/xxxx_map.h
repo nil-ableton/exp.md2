@@ -15,6 +15,7 @@ typedef struct Map
 } Map;
 
 void map_grow(Map* map, size_t size);
+void map_free(Map* map);
 
 // returns value at key
 void* map_get(Map* map, uint64_t key);

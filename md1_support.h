@@ -74,5 +74,6 @@ typedef struct MD1_Loader
 } MD1_Loader;
 
 bool md1_load(MD1_Loader* loader, MD1_EntityCatalog* dest);
+void md1_free(MD1_EntityCatalog* catalog);
 
 #endif

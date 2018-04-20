@@ -44,6 +44,11 @@ static void* loader_calloc(MD1_Loader* loader, size_t n, size_t elem_size)
   return ptr;
 }
 
+static void loader_free(void* data)
+{
+  free(data);
+}
+
 #define LOADER_PROLOGUE(loader, version_f, version_l)                                    \
   if (loader->error || loader->version < version_f || loader->version >= version_l)      \
     return !loader->error;
@@ -319,6 +324,15 @@ bool md1_load(MD1_Loader* loader, MD1_EntityCatalog* dest)
   }
   return !loader->error;
 }
+
+void md1_free(MD1_EntityCatalog* catalog)
+{
+  loader_free(catalog->songs), catalog->songs = NULL;
+  loader_free(catalog->songtracks), catalog->songs = NULL;
+  loader_free(catalog->audioclips), catalog->songs = NULL;
+  loader_free(catalog->files), catalog->songs = NULL;
+}
+
 
   // @todo how to do garbage collection of MD1 documents?
 

@@ -66,16 +66,18 @@ static char const* md2_ui__truncate_text(NVGcontext* vg,
   return truncation_point;
 }
 
-void md2_ui_vtextf(MD2_UserInterface* ui,
-                   MD2_RenderingOptions options,
-                   MD2_Rect2 rect,
-                   char* fmt,
-                   va_list args)
+NVGcontext* md2_ui_vg(MD2_UserInterface* ui, MD2_UIElement element)
 {
+  return element.layer ? ui->overlay_vg : ui->vg;
+}
+
+void md2_ui_vtextf(MD2_UserInterface* ui, MD2_UIElement element, char* fmt, va_list args)
+{
+  MD2_Rect2 rect = element.rect;
   if (!rect.x1)
-    rect.x1 = ui->bounds.x1;
+    rect.x1 = max_f(rect.x0, ui->bounds.x1);
   if (!rect.x0)
-    rect.x0 = ui->bounds.x0;
+    rect.x0 = min_f(rect.x0, ui->bounds.x0);
 
   if (!rects_intersect(ui->bounds, rect))
   {
@@ -85,7 +87,7 @@ void md2_ui_vtextf(MD2_UserInterface* ui,
 
   // @todo left truncation (this only does right truncation)
 
-  NVGcontext* vg = options.layer_index ? ui->overlay_vg : ui->vg;
+  NVGcontext* vg = md2_ui_vg(ui, element);
   char* text = NULL;
   buf_vprintf(text, fmt, args);
   if (buf_len(text) == 0)
@@ -114,12 +116,11 @@ void md2_ui_vtextf(MD2_UserInterface* ui,
   buf_free(text), text = NULL;
 }
 
-void md2_ui_textf(
-  MD2_UserInterface* ui, MD2_RenderingOptions options, MD2_Rect2 rect, char* fmt, ...)
+void md2_ui_textf(MD2_UserInterface* ui, MD2_UIElement element, char* fmt, ...)
 {
   va_list args;
   va_start(args, fmt);
-  md2_ui_vtextf(ui, options, rect, fmt, args);
+  md2_ui_vtextf(ui, element, fmt, args);
   va_end(args);
 }
 
@@ -172,6 +173,24 @@ static void test_rect()
   }
 }
 
+static void test_rect_exhaustive()
+{
+  MD2_Rect2 rect = {
+    .x0 = 0.0f,
+    .x1 = 1.0f,
+    .y0 = 2.0f,
+    .y1 = 3.0f,
+  };
+  for (float y = rect.y0; y < rect.y1; y += 0.001f)
+  {
+    for (float x = rect.x0; x < rect.x1; x += 0.001f)
+    {
+      MD2_Point2 p = {x, y};
+      assert(rect_intersects(rect, p));
+    }
+  }
+}
+
 uint64_t md2_ui_element_allocate(MD2_ElementAllocator* a)
 {
   uint64_t id = a->id_l;
@@ -202,6 +221,126 @@ MD2_ElementAllocator* md2_ui_scope_end(MD2_ElementAllocator* scope)
   parent->state = MD2_ElementAllocator_None;
   md2_ui_free(scope);
   return parent;
+}
+
+
+void md2_ui_rect(MD2_UserInterface* ui, MD2_UIElement element, NVGcolor color)
+{
+  NVGcontext* vg = md2_ui_vg(ui, element);
+  MD2_Rect2 rect = element.rect;
+  nvgBeginPath(vg);
+  nvgRect(vg, rect.x0, rect.y0, rect.x1 - rect.x0, rect.y1 - rect.y0);
+  nvgFillColor(vg, color);
+  nvgFill(vg);
+}
+
+void md2_ui_waveform(MD2_UserInterface* ui,
+                     MD2_UIElement element,
+                     WaveformData const* waveform)
+{
+  if (!rects_intersect(ui->bounds, element.rect))
+    return;
+  float top_y = element.rect.y0;
+  float left_x = element.rect.x0;
+  float size_x = element.rect.x1 - element.rect.x0;
+  float size_y = element.rect.y1 - element.rect.y0;
+  float halfsize_y = size_y / 2.0f;
+  float inc_x = size_x / waveform->len_pot;
+  float mid_y = top_y + halfsize_y;
+
+
+  NVGcontext* vg = md2_ui_vg(ui, element);
+
+  NVGcolor color = nvgRGBA(255, 192, 255, 160);
+  NVGcolor red_color = nvgRGBA(255, 40, 60, 160);
+  NVGcolor rms_color = nvgRGBA(255, 200, 255, 160);
+
+  NVGpaint min_gradient =
+    nvgLinearGradient(vg, left_x, mid_y, left_x, mid_y + halfsize_y, color, red_color);
+
+  NVGpaint max_gradient =
+    nvgLinearGradient(vg, left_x, mid_y, left_x, mid_y - halfsize_y, color, red_color);
+
+  float c_x;
+  c_x = left_x;
+
+  MD2_Rect2 intersecting_rect = {0};
+  size_t intersecting_chunk_index;
+  for (size_t chunk_index = 0; chunk_index < waveform->len_pot;
+       chunk_index++, c_x += inc_x)
+  {
+    MD2_Rect2 rect = {.x0 = c_x,
+                      .x1 = max_f(c_x + 1, c_x + inc_x),
+                      .y0 = element.rect.y0,
+                      .y1 = element.rect.y1};
+    if (rect_intersects(rect, ui->pointer_position))
+    {
+      intersecting_chunk_index = chunk_index;
+      intersecting_rect = rect;
+    }
+    if (c_x > ui->pointer_position.x)
+      break;
+  }
+
+  if (intersecting_rect.x0 != intersecting_rect.x1)
+  {
+    md2_ui_rect(
+      ui, (MD2_UIElement){.rect = intersecting_rect}, nvgRGBA(255, 255, 255, 128));
+    md2_ui_textf(
+      ui,
+      (MD2_UIElement){.layer = 1, .rect = {.x0 = intersecting_rect.x0 + 10, .y1 = mid_y}},
+      "[%f, %f]", waveform->min[intersecting_chunk_index],
+      waveform->max[intersecting_chunk_index]);
+  }
+
+  nvgBeginPath(vg);
+  c_x = left_x;
+  for (size_t chunk_index = 0; chunk_index < waveform->len_pot;
+       chunk_index++, c_x += inc_x)
+  {
+    float size_y = -halfsize_y * waveform->min[chunk_index];
+    nvgRect(vg, c_x, mid_y, inc_x, size_y);
+  }
+  nvgFillPaint(vg, min_gradient);
+  nvgFill(vg);
+
+  nvgBeginPath(vg);
+  c_x = left_x;
+  for (size_t chunk_index = 0; chunk_index < waveform->len_pot;
+       chunk_index++, c_x += inc_x)
+  {
+    float size_y = -halfsize_y * waveform->max[chunk_index];
+    nvgRect(vg, c_x, mid_y, inc_x, size_y);
+  }
+  nvgFillPaint(vg, max_gradient);
+  nvgFill(vg);
+
+  nvgBeginPath(vg);
+  c_x = left_x;
+  for (size_t chunk_index = 0; chunk_index < waveform->len_pot;
+       chunk_index++, c_x += inc_x)
+  {
+    if (waveform->min[chunk_index] < -1.0f || waveform->max[chunk_index] > 1.0f)
+    {
+      float min_y = mid_y + -halfsize_y * waveform->max[chunk_index];
+      float max_y = mid_y + -halfsize_y * waveform->min[chunk_index];
+      nvgRect(vg, c_x, max_y, inc_x, min_y - max_y);
+    }
+  }
+  nvgFillColor(vg, red_color);
+  nvgFill(vg);
+
+  nvgBeginPath(vg);
+  c_x = left_x;
+  for (size_t chunk_index = 0; chunk_index < waveform->len_pot;
+       chunk_index++, c_x += inc_x)
+  {
+    float min_y = halfsize_y * waveform->rms[chunk_index];
+    float max_y = -halfsize_y * waveform->rms[chunk_index];
+    nvgRect(vg, c_x, mid_y + min_y, inc_x, max_y - min_y);
+  }
+  nvgFillColor(vg, rms_color);
+  nvgFill(vg);
 }
 
 static void test_allocate_many_recursive(MD2_ElementAllocator* scope,
@@ -235,6 +374,8 @@ static void test_element_allocator()
   test_allocate_many_recursive(scope, 8, 3, &seen_ids);
   assert(root.state == MD2_ElementAllocator_None);
   assert(scope->id_l - scope->id == 8 * 3 + 3);
+
+  map_free(&seen_ids);
 }
 
 static void test_truncate_get_bounds(
@@ -265,6 +406,7 @@ static void test_truncate()
 int test_ui(int argc, char const** argv)
 {
   test_rect();
+  test_rect_exhaustive();
   test_element_allocator();
   test_truncate();
   return 0;

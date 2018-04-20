@@ -39,18 +39,19 @@ typedef struct MD2_UserInterface
   struct NVGcontext* overlay_vg; // overlay for drag images
 } MD2_UserInterface;
 
-typedef struct MD2_RenderingOptions
+typedef struct MD2_UIElement
 {
-  int layer_index;
-} MD2_RenderingOptions;
+  int layer;
+  MD2_Rect2 rect;
+} MD2_UIElement;
 
-void md2_ui_textf(
-  MD2_UserInterface* ui, MD2_RenderingOptions options, MD2_Rect2 rect, char* fmt, ...);
-void md2_ui_vtextf(MD2_UserInterface* ui,
-                   MD2_RenderingOptions options,
-                   MD2_Rect2 rect,
-                   char* fmt,
-                   va_list args);
+struct NVGcontext* md2_ui_vg(MD2_UserInterface* ui, MD2_UIElement element);
+void md2_ui_rect(MD2_UserInterface* ui, MD2_UIElement element, struct NVGcolor color);
+void md2_ui_textf(MD2_UserInterface* ui, MD2_UIElement element, char* fmt, ...);
+void md2_ui_vtextf(MD2_UserInterface* ui, MD2_UIElement rect, char* fmt, va_list args);
+void md2_ui_waveform(MD2_UserInterface* ui,
+                     MD2_UIElement element,
+                     WaveformData const* waveform);
 
 typedef struct MD2_ElementAllocator
 {
@@ -74,24 +75,9 @@ MD2_ElementAllocator* md2_ui_scope_end(MD2_ElementAllocator* scope);
 
 // Geometry
 
-static inline float min_f(float a, float b)
+static inline MD2_Vec2 to_point_from_origin(MD2_Point2 a)
 {
-  return a < b ? a : b;
-}
-
-static inline float max_f(float a, float b)
-{
-  return a < b ? b : a;
-}
-
-static inline float min_f_unit()
-{
-  return FLT_MAX;
-}
-
-static inline float max_f_unit()
-{
-  return FLT_MIN;
+  return (MD2_Vec2){a.x, a.y};
 }
 
 static inline MD2_Rect2 rect_make(MD2_Point2 a, MD2_Point2 b)
@@ -102,9 +88,38 @@ static inline MD2_Rect2 rect_make(MD2_Point2 a, MD2_Point2 b)
                      .y1 = max_f(a.y, b.y)};
 }
 
+static inline MD2_Rect2 rect_make_valid(MD2_Rect2 a)
+{
+  if (a.x0 > a.x1)
+    a.x0 = a.x1;
+  if (a.y0 > a.y1)
+    a.y0 = a.y1;
+  return a;
+}
+
 static inline MD2_Rect2 rect_make_point_size(MD2_Point2 point, MD2_Vec2 size)
 {
   return rect_make(point, (MD2_Point2){point.x + size.x, point.y + size.y});
+}
+
+static inline MD2_Rect2 rect_translate(MD2_Rect2 rect, MD2_Vec2 delta)
+{
+  rect.x0 += delta.x;
+  rect.x1 += delta.x;
+  rect.y0 += delta.y;
+  rect.y1 += delta.y;
+  return rect;
+}
+
+
+// @todo translated/expanded and the likes is a better name for things which aren't action
+static inline MD2_Rect2 rect_expand(MD2_Rect2 rect, MD2_Vec2 margin)
+{
+  rect.x0 -= margin.x;
+  rect.x1 += margin.x;
+  rect.y0 -= margin.y;
+  rect.y1 += margin.y;
+  return rect_make_valid(rect);
 }
 
 static inline MD2_Point2 rect_min_point(MD2_Rect2 aabb2)
@@ -117,9 +132,20 @@ static inline MD2_Point2 rect_max_point(MD2_Rect2 aabb2)
   return (MD2_Point2){.x = aabb2.x1, .y = aabb2.y1};
 }
 
+static inline MD2_Rect2 rect_intersection(MD2_Rect2 a, MD2_Rect2 b)
+{
+  return (MD2_Rect2){
+    .x0 = max_f(a.x0, b.x0),
+    .x1 = min_f(a.x1, b.x1),
+    .y0 = max_f(a.y0, b.y0),
+    .y1 = min_f(a.y1, b.y1),
+  };
+}
+
 static inline bool rect_intersects(MD2_Rect2 aabb2, MD2_Point2 point)
 {
-  if (point.x < aabb2.x0 || point.x >= aabb2.y1)
+  assert(aabb2.x0 <= aabb2.x1 && aabb2.y0 <= aabb2.y1);
+  if (point.x < aabb2.x0 || point.x >= aabb2.x1)
     return false;
   if (point.y < aabb2.y0 || point.y >= aabb2.y1)
     return false;
@@ -128,6 +154,8 @@ static inline bool rect_intersects(MD2_Rect2 aabb2, MD2_Point2 point)
 
 static inline bool rects_intersect(MD2_Rect2 a, MD2_Rect2 b)
 {
+  assert(a.x0 <= a.x1 && a.y0 <= a.y1);
+  assert(b.x0 <= b.x1 && b.y0 <= b.y1);
   if (b.x0 >= a.x1)
     return false;
   if (a.x0 >= b.x1)

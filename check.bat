@@ -16,13 +16,15 @@ set CLCommonFlags=-nologo -W4 -WX -Zs -wd4204
 
 REM Actual Check
 REM ============
-%CLExe% %HereDir%/libs/xxxx_buf.c ^
-  %CLCommonFlags%
-
-%CLExe% %HereDir%/libs/xxxx_map.c ^
-  %CLCommonFlags%
-
-%CLExe% %HereDir%/libs/xxxx_iobuffer.c ^
-  %CLCommonFlags% -D_CRT_SECURE_NO_WARNINGS
+%CLExe% %HereDir%/libs/xxxx_buf.c %CLCommonFlags%
+if %errorlevel% neq 0 exit /b 1
+%CLExe% %HereDir%/libs/xxxx_map.c %CLCommonFlags%
+if %errorlevel% neq 0 exit /b 1
+%CLExe% %HereDir%/libs/xxxx_tasks.c %CLCommonFlags%
+if %errorlevel% neq 0 exit /b 1
+%CLExe% %HereDir%/libs/xxxx_iobuffer.c %CLCommonFlags% -D_CRT_SECURE_NO_WARNINGS
+if %errorlevel% neq 0 exit /b 1
+%CLExe% %HereDir%/libs/xxxx_queue.c %CLCommonFlags% -wd4221
+if %errorlevel% neq 0 exit /b 1
 
 echo off
