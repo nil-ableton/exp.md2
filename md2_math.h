@@ -23,6 +23,11 @@ static inline float max_f_unit()
   return FLT_MIN;
 }
 
+static inline intmax_t min_i(intmax_t a, intmax_t b)
+{
+  return a < b ? a : b;
+}
+
 static inline intmax_t max_i(intmax_t a, intmax_t b)
 {
   return a < b ? b : a;

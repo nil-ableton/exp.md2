@@ -1,6 +1,9 @@
 #ifndef MD2_UI
 #define MD2_UI
 
+#include "md2_temp_allocator.h" // @todo modularity?
+#include "libs/xxxx_map.h" // @todo modularity?
+
 #include <float.h>
 
 typedef struct MD2_Point2
@@ -21,22 +24,42 @@ typedef struct MD2_Rect2
 struct Mu;
 struct NVGcontext;
 
+typedef enum MD2_PayloadType
+{
+  MD2_PayloadType_None = 0,
+  MD2_PayloadType_FilePathList = 1,
+} MD2_PayloadType;
+
+typedef struct MD2_DragGesture
+{
+  bool started;
+  bool running;
+  bool ended;
+  TempAllocator payload_allocator;
+  Map payload_by_type;
+} MD2_DragGesture;
+
 typedef struct MD2_UserInterface
 {
   // User supplied on update:
   MD2_Vec2 size;
   float pixel_ratio;
 
+  // input processing
   MD2_Point2 pointer_position;
+  MD2_DragGesture drag;
+
+  // UI State
   MD2_Rect2 bounds;
-  bool frame_started;
   uint64_t hot_element;
   uint64_t active_element;
   struct Map* elements_map;
 
+  // Low-level
   struct Mu* mu;                 // input & low-level output
   struct NVGcontext* vg;         // nvg canvas
   struct NVGcontext* overlay_vg; // overlay for drag images
+  bool frame_started;
 } MD2_UserInterface;
 
 typedef struct MD2_UIElement
@@ -75,9 +98,27 @@ MD2_ElementAllocator* md2_ui_scope_end(MD2_ElementAllocator* scope);
 
 // Geometry
 
+static inline MD2_Vec2 vec_make(MD2_Point2 p_from, MD2_Point2 p_to);
+
+static inline float sqdistance2(MD2_Point2 a, MD2_Point2 b)
+{
+  MD2_Vec2 vec = vec_make(a, b);
+  return vec.x * vec.x + vec.y * vec.y;
+}
+
 static inline MD2_Vec2 to_point_from_origin(MD2_Point2 a)
 {
   return (MD2_Vec2){a.x, a.y};
+}
+
+static inline MD2_Vec2 vec_make(MD2_Point2 p_from, MD2_Point2 p_to)
+{
+  return (MD2_Vec2){p_to.x - p_from.x, p_to.y - p_from.y};
+}
+
+static inline MD2_Vec2 vec_add(MD2_Vec2 a, MD2_Vec2 b)
+{
+  return (MD2_Vec2){a.x + b.x, a.y + b.y};
 }
 
 static inline MD2_Rect2 rect_make(MD2_Point2 a, MD2_Point2 b)
@@ -134,12 +175,8 @@ static inline MD2_Point2 rect_max_point(MD2_Rect2 aabb2)
 
 static inline MD2_Rect2 rect_intersection(MD2_Rect2 a, MD2_Rect2 b)
 {
-  return (MD2_Rect2){
-    .x0 = max_f(a.x0, b.x0),
-    .x1 = min_f(a.x1, b.x1),
-    .y0 = max_f(a.y0, b.y0),
-    .y1 = min_f(a.y1, b.y1),
-  };
+  return rect_make((MD2_Point2){max_f(a.x0, b.x0), max_f(a.y0, b.y0)},
+                   (MD2_Point2){min_f(a.x1, b.x1), min_f(a.y1, b.y1)});
 }
 
 static inline bool rect_intersects(MD2_Rect2 aabb2, MD2_Point2 point)

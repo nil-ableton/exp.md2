@@ -68,6 +68,7 @@ void map_free(Map* map)
 {
   free(map->keys), map->keys = NULL;
   free(map->ptrs), map->ptrs = NULL;
+  *map = (Map){0};
 }
 
 // returns value at key

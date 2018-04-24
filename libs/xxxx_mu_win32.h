@@ -11,6 +11,8 @@ enum
   MU_SHIFT = 0x10,    // VK_SHIFT
   MU_PAGEUP = 0x21,   // VK_PRIOR
   MU_PAGEDOWN = 0x22, // VK_NEXT
+  MU_HOME = 0x24,     // VK_HOME
+  MU_END = 0x23,      // VK_END
 };
 
 typedef void* HANDLE;

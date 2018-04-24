@@ -138,9 +138,12 @@ void task_deinit()
 {
   assert(g_task_init);
   g_worker_thread_mustrun = 0;
+  WaitForSingleObject(g_worker_thread, INFINITE);
   CloseHandle(g_worker_thread);
   mtx_deinit(&g_worker_thread_input_lock);
   mtx_deinit(&g_tasks_lock);
+  buf_free(g_tasks);
+  buf_free(g_worker_thread_input);
   g_task_init = false;
 }
 

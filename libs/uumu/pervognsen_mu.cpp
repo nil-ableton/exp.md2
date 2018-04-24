@@ -44,7 +44,7 @@ MU_EXTERN_END
 #define Assert(x)                                                                        \
   if (!(x))                                                                              \
   {                                                                                      \
-    MessageBoxA(0, x, "Assertion Failed", MB_OK);                                        \
+    MessageBoxA(0, #x, "Assertion Failed", MB_OK);                                        \
     __debugbreak();                                                                      \
   }
 #else

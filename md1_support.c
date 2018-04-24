@@ -1,5 +1,6 @@
 #include "md1_support.h"
 
+#include "md2_main.h"
 #include "md2_serialisation.h"
 
 #include "libs/xxxx_buf.h"
@@ -98,6 +99,14 @@ static bool load_uint64(MD1_Loader* loader,
   return !loader->error;
 }
 
+size_t size_t_from_uint64(uint64_t x)
+{
+	size_t y = (size_t)x;
+	assert(((uint64_t)y) == x);
+	if (y != x) md2_fatal("ERROR: size too large for machine, got %llu", x);
+	return y;
+}
+
 static bool load_float32(MD1_Loader* loader,
                          int field_version_f,
                          int field_version_l,
@@ -116,9 +125,10 @@ static bool load_str(MD1_Loader* loader,
                      size_t* d_chars_n)
 {
   LOADER_PROLOGUE(loader, field_version_f, field_version_l);
-  uint64_t len;
-  load_uint64(loader, field_version_f, field_version_l, &len);
-  uint8_t* chars = loader_calloc(loader, 1, len + 1);
+  uint64_t len_uint64;
+  load_uint64(loader, field_version_f, field_version_l, &len_uint64);
+  size_t len = size_t_from_uint64(len_uint64);
+  uint8_t* chars = loader_calloc(loader, 1, size_t_from_uint64(len + 1));
   if (!load_uint8_n(loader, field_version_f, field_version_l, chars, len))
   {
     free(chars), chars = NULL;
@@ -153,9 +163,11 @@ static bool load_uint64_array(MD1_Loader* loader,
                               uint64_t** array_ptr,
                               size_t* array_n_ptr)
 {
-  uint64_t values_n;
-  if (!load_uint64(loader, field_version_f, field_version_l, &values_n))
+  uint64_t values_n_uint64;
+  if (!load_uint64(loader, field_version_f, field_version_l, &values_n_uint64))
     return loader_error(loader, "expected array count");
+
+  size_t values_n = size_t_from_uint64(values_n_uint64);
 
   uint64_t* values = loader_calloc(loader, values_n, sizeof values[0]);
   for (size_t i = 0; !loader->error && i < values_n; i++)
@@ -169,7 +181,7 @@ static bool load_uint64_array(MD1_Loader* loader,
   else
   {
     *array_ptr = values;
-    *array_n_ptr = values_n;
+    *array_n_ptr = values_n_uint64;
   }
   return !loader->error;
 }

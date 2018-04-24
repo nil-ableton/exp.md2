@@ -7,16 +7,29 @@
 
 void md2_ui_update(MD2_UserInterface* ui)
 {
-  ui->pointer_position = (MD2_Point2){
-    .x = ui->mu->mouse.position.x / ui->pixel_ratio,
-    .y = ui->mu->mouse.position.y / ui->pixel_ratio,
-  };
+  if (ui->drag.ended)
+  {
+    temp_allocator_free(&ui->drag.payload_allocator);
+  }
 
   if (ui->frame_started)
   {
     // Stacking order:
     nvgEndFrame(ui->vg);
     nvgEndFrame(ui->overlay_vg);
+  }
+
+  ui->pointer_position = (MD2_Point2) {
+    .x = ui->mu->mouse.position.x / ui->pixel_ratio,
+      .y = ui->mu->mouse.position.y / ui->pixel_ratio,
+  };
+  ui->drag.started = false;
+  ui->drag.ended = false;
+
+  if (ui->mu->mouse.left_button.released)
+  {
+    ui->drag.ended = true;
+    ui->drag.running = false;
   }
 
   nvgBeginFrame(ui->overlay_vg, ui->size.x, ui->size.y, ui->pixel_ratio);

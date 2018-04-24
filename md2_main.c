@@ -3,6 +3,8 @@
 #include "md2_math.h"
 #include "md2_posix.h"
 #include "md2_ui.h"
+#include "md2_win32.h"
+#include "md2_temp_allocator.h"
 
 #include "libs/xxxx_buf.h"
 #include "libs/xxxx_iobuffer.h"
@@ -39,6 +41,17 @@ enum
 {
   MD2_UI_WAVEFORM_SIZE = 512,
 };
+
+static void md2_exit_with_message(char const* fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  printf("ERROR: ");
+  vprintf(fmt, args);
+  printf("\n");
+  va_end(args);
+  exit(1);
+}
 
 static printf_line(int indent, char const* fmt, ...)
 {
@@ -154,40 +167,6 @@ int test_main(int argc, char const* argv[])
   return 0;
 }
 
-static void md2_fatal(char const* fmt, ...)
-{
-  va_list args;
-  va_start(args, fmt);
-  printf("ERROR: ");
-  vprintf(fmt, args);
-  printf("\n");
-  va_end(args);
-  assert(0);
-  exit(1);
-}
-
-typedef struct WindowMetrics
-{
-  float device_px_per_ref_points;
-  struct Mu_Int2 window_size;
-  float dpi;
-} WindowMetrics;
-
-static WindowMetrics get_window_metrics(struct Mu* mu)
-{
-  WindowMetrics metrics = {
-    .device_px_per_ref_points = 1.0f,
-    .window_size = mu->window.size,
-    .dpi = 96.0,
-  };
-#if defined(_WIN32)
-  UINT Dpi = GetDpiForWindow(mu->win32->window);
-  metrics.device_px_per_ref_points = Dpi / 96.0;
-  metrics.dpi = Dpi;
-#endif
-  return metrics;
-}
-
 static char* str_dup_range(char* f, char* l)
 {
   char* r = calloc(1, l - f + 1);
@@ -195,6 +174,17 @@ static char* str_dup_range(char* f, char* l)
   r[l - f] = '\0';
   return r;
 }
+
+#if defined(_WIN32)
+static DWORD DWORD_from_size_t(size_t x)
+{
+  DWORD y = (DWORD)x;
+  assert(((size_t)y) == x);
+  if (((size_t)y) != x)
+    md2_fatal("too large of a number for DWORD: %llu", x);
+  return y;
+}
+#endif
 
 static char* get_exe_dir()
 {
@@ -204,7 +194,7 @@ static char* get_exe_dir()
   buf_fit(buffer, MAX_PATH);
   while (1)
   {
-    DWORD size = GetModuleFileNameA(NULL, buffer, buf_cap(buffer));
+    DWORD size = GetModuleFileNameA(NULL, buffer, DWORD_from_size_t(buf_cap(buffer)));
     if (GetLastError() == ERROR_INSUFFICIENT_BUFFER || size == 0)
     {
       buf_fit(buffer, 256);
@@ -281,75 +271,47 @@ void load_md1_file(LoadAudioTask* load_audio_task)
   load_audio_task->success = success;
 }
 
-typedef struct TempAllocatorRegion
+static inline char* strdup_temp(char const* src, TempAllocator* allocator)
 {
-  char* bytes_f;
-  size_t bytes_n;
-  size_t bytes_allocated;
-} TempAllocatorRegion;
-
-typedef struct TempAllocator
-{
-  TempAllocatorRegion* regions;
-} TempAllocator;
-
-bool region_fits(TempAllocatorRegion* region, size_t added_bytes_n)
-{
-  return added_bytes_n <= (region->bytes_n - region->bytes_allocated);
+  char* dst = temp_calloc(allocator, strlen(src) + 1, 1);
+  strcpy(dst, src);
+  return dst;
 }
 
-void temp_allocator_free(TempAllocator* temp_allocator)
+static inline void* temp_memdup_range(TempAllocator* allocator, void const* first, void const* last)
 {
-  for (TempAllocatorRegion *region_i = &temp_allocator->regions[0],
-                           *region_l = buf_end(temp_allocator->regions);
-       region_i < region_l; region_i++)
-  {
-    free(region_i->bytes_f), region_i->bytes_f = NULL;
-  }
-  buf_free(temp_allocator->regions), temp_allocator->regions = NULL;
+  char const* bytes_f = first;
+  char const* bytes_l = last;
+  void* dst = temp_calloc(allocator, 1, bytes_l - bytes_f);
+  memcpy(dst, bytes_f, bytes_l - bytes_f);
+  return dst;
 }
 
-void* temp_calloc(TempAllocator* temp_allocator, size_t n, size_t element_size)
+static inline char* temp_sprintf(TempAllocator* allocator, char const* fmt, ...)
 {
-  assert(element_size * n > 0);
-  assert(element_size < SIZE_MAX / n); // @todo compare with SQRT_SIZE_MAX
-
-  uintptr_t alignment = 16;
-  uintptr_t needed_size = element_size * n;
-  uintptr_t aligned_needed_size =
-    round_up_multiple_of_pot_uintptr(needed_size, alignment);
-
-  if (buf_len(temp_allocator->regions) == 0
-      || buf_end(temp_allocator->regions)[-1].bytes_allocated
-           == buf_end(temp_allocator->regions)[-1].bytes_n)
-  {
-    size_t region_size = max_i(1024 * 1024, aligned_needed_size);
-    TempAllocatorRegion new_region = {
-      .bytes_f = calloc(1, region_size),
-      .bytes_n = region_size,
-    };
-    buf_push(temp_allocator->regions, new_region);
-  }
-  TempAllocatorRegion* region = &buf_end(temp_allocator->regions)[-1];
-  assert(region_fits(region, aligned_needed_size));
-  char* ptr =
-    &region->bytes_f[region->bytes_allocated] + aligned_needed_size - needed_size;
-  assert(region->bytes_n - (ptr - region->bytes_f) >= needed_size);
-  return ptr;
+  va_list args;
+  va_start(args, fmt);
+  size_t needed_n = vsnprintf(NULL, 0, fmt, args);
+  va_end(args);
+  char* y = temp_calloc(allocator, needed_n + 1, 1);
+  va_start(args, fmt);
+  vsnprintf(y, needed_n + 1, fmt, args);
+  va_end(args);
+  return y;
 }
 
-char* temp_str_nicenumber(int x, TempAllocator* temp_allocator)
+char* temp_str_nicenumber(intmax_t x, TempAllocator* temp_allocator)
 {
   char* digits_only = NULL;
-  buf_printf(digits_only, "%d", x);
+  buf_printf(digits_only, "%lld", x);
 
   char* grouping_str = u8"\u2009";
   size_t grouping_str_n = strlen(grouping_str);
 
-  int digits_n = buf_len(digits_only);
-  int groupings_n = digits_n / 3;
-  int next_grouping_i = digits_n % 3;
-  int str_n = digits_n + groupings_n + grouping_str_n;
+  size_t digits_n = buf_len(digits_only);
+  size_t groupings_n = digits_n / 3;
+  size_t next_grouping_i = digits_n % 3;
+  size_t str_n = digits_n + groupings_n + grouping_str_n;
 
   char* d_str = temp_calloc(temp_allocator, str_n, 1);
   char* d_str_l = d_str;
@@ -403,7 +365,7 @@ void md2_ui_region_free(MD2_UIRegion* region)
   map_free(&region->element_index_by_data);
 }
 
-void md2_ui_region_add(MD2_UIRegion* region, MD2_UIElement element, void* data)
+void md2_ui_region_add(MD2_UIRegion* region, MD2_UIElement element, void const* data)
 {
   assert(data);
   size_t element_index = buf_len(region->elements_buf);
@@ -413,7 +375,7 @@ void md2_ui_region_add(MD2_UIRegion* region, MD2_UIElement element, void* data)
     &region->element_index_by_data, (intptr_t)data, (void*)(uintptr_t)element_index);
 }
 
-MD2_UIElement md2_ui_region_get_element(MD2_UIRegion* region, void* data)
+MD2_UIElement md2_ui_region_get_element(MD2_UIRegion* region, void const* data)
 {
   size_t element_index = (size_t)map_get(&region->element_index_by_data, (intptr_t)data);
   return region->elements_buf[element_index];
@@ -435,12 +397,7 @@ MD2_Rect2 rect_translate_within(MD2_Rect2 bounds,
                                 MD2_Point2 new_origin,
                                 MD2_Vec2 margin_size)
 {
-  MD2_Rect2 max_rect = bounds;
-  max_rect.x0 += margin_size.x;
-  max_rect.x1 -= margin_size.x;
-  max_rect.y0 -= margin_size.y;
-  max_rect.y1 -= margin_size.y;
-  max_rect = rect_make_valid(max_rect);
+  MD2_Rect2 max_rect = rect_expand(bounds, (MD2_Vec2){-margin_size.x, -margin_size.y});
   return rect_intersection(
     max_rect, rect_translate(rect, to_point_from_origin(new_origin)));
 }
@@ -470,7 +427,18 @@ void md2_ui_scroller_start(MD2_UserInterface* ui,
     {
       scroller_data->content_user_top_y += 16.0 * 5;
     }
+    if (mu->keys[MU_HOME].pressed)
+    {
+      scroller_data->content_user_top_y = content_min_top_y;
+    }
+    if (mu->keys[MU_END].pressed)
+    {
+      scroller_data->content_user_top_y = content_max_top_y;
+    }
   }
+
+  scroller_data->content_min_top_y = content_min_top_y;
+  scroller_data->content_max_top_y = content_max_top_y;
 
   // apply constraints
   scroller_data->content_user_top_y =
@@ -498,77 +466,92 @@ void md2_ui_scroller_end(MD2_UserInterface* ui,
                          MD2_UIElement element)
 {
   struct Mu* mu = ui->mu;
-  // draw the scrollbar
-  MD2_UIElement scrollbar = {
-    .rect = element.rect,
-  };
-  scrollbar.rect.x0 = scrollbar.rect.x1 - 10;
-
-  MD2_UIElement scrollbar_content_handle = scrollbar;
-  float content_y_from_scrollbar_y = 1.0;
+  if (content->bounds.y1 != content->bounds.y0)
   {
-    float content_size_y = (content->bounds.y1 - content->bounds.y0);
-    content_y_from_scrollbar_y = content_size_y / (scrollbar.rect.y1 - scrollbar.rect.y0);
-    float normalized_content_top = scroller_data->content_top_y / content_size_y;
-    float normalized_content_bottom =
-      (scroller_data->content_top_y + (element.rect.y1 - element.rect.y0))
-      / content_size_y;
-    scrollbar_content_handle.rect.y0 =
-      scrollbar.rect.y0
-      + normalized_content_top * (scrollbar.rect.y1 - scrollbar.rect.y0);
-    scrollbar_content_handle.rect.y1 =
-      scrollbar.rect.y0
-      + normalized_content_bottom * (scrollbar.rect.y1 - scrollbar.rect.y0);
-  }
+    // draw the scrollbar
+    MD2_UIElement scrollbar = {
+      .rect = element.rect,
+    };
+    scrollbar.rect.x0 = scrollbar.rect.x1 - 10;
 
-  MD2_Rect2 fade_in_rect = rect_expand(scrollbar.rect, (MD2_Vec2){5, 0});
-  MD2_Rect2 fade_out_rect = rect_expand(scrollbar.rect, (MD2_Vec2){10, 0});
-
-  if (mu->mouse.left_button.down)
-  {
-    if (rect_intersects(scrollbar_content_handle.rect, ui->pointer_position))
+    MD2_UIElement scrollbar_content_handle = scrollbar;
+    float content_y_from_scrollbar_y = 1.0;
+    float visible_content_size_y = element.rect.y1 - element.rect.y0;
     {
-      scroller_data->scrollbar_is_being_dragged = true;
+      float content_size_y = (content->bounds.y1 - content->bounds.y0);
+      content_y_from_scrollbar_y =
+        content_size_y / (scrollbar.rect.y1 - scrollbar.rect.y0);
+      float normalized_content_top = scroller_data->content_top_y / content_size_y;
+      float normalized_content_bottom =
+        (scroller_data->content_top_y + (element.rect.y1 - element.rect.y0))
+        / content_size_y;
+      scrollbar_content_handle.rect.y0 =
+        scrollbar.rect.y0
+        + normalized_content_top * (scrollbar.rect.y1 - scrollbar.rect.y0);
+      scrollbar_content_handle.rect.y1 =
+        scrollbar.rect.y0
+        + normalized_content_bottom * (scrollbar.rect.y1 - scrollbar.rect.y0);
     }
-  }
-  else
-  {
-    scroller_data->scrollbar_is_being_dragged = false;
-  }
 
-  if (scroller_data->scrollbar_is_being_dragged)
-  {
-    scroller_data->content_top_y +=
-      mu->mouse.delta_position.y * content_y_from_scrollbar_y;
-    scroller_data->content_user_top_y = scroller_data->content_top_y;
-  }
+    MD2_Rect2 fade_in_rect = rect_expand(scrollbar.rect, (MD2_Vec2){5, 0});
+    MD2_Rect2 fade_out_rect = rect_expand(scrollbar.rect, (MD2_Vec2){10, 0});
 
-  if (scroller_data->scrollbar_is_being_dragged)
-  {
-    scroller_data->scrollbar_user_alpha = 255;
-  }
-  else if (scroller_data->content_top_y != scroller_data->content_user_top_y)
-  {
-    scroller_data->scrollbar_user_alpha = 255;
-  }
-  else if (rect_intersects(fade_in_rect, ui->pointer_position))
-  {
-    scroller_data->scrollbar_user_alpha = 255;
-  }
-  else if (!rect_intersects(fade_out_rect, ui->pointer_position))
-  {
-    scroller_data->scrollbar_user_alpha = 0;
-  }
+    MD2_Rect2 scrollbar_content_handle_interaction_rect =
+      rect_expand(scrollbar_content_handle.rect, (MD2_Vec2){4, 4});
+    if (mu->mouse.left_button.down)
+    {
+      if (rect_intersects(
+            scrollbar_content_handle_interaction_rect, ui->pointer_position))
+      {
+        scroller_data->scrollbar_is_being_dragged = true;
+      }
+    }
+    else
+    {
+      scroller_data->scrollbar_is_being_dragged = false;
+    }
 
-  float user_interaction_animation_rate = 3.0;
-  scroller_data->scrollbar_alpha = interpolate_linear_f(
-    scroller_data->scrollbar_user_alpha, scroller_data->scrollbar_alpha,
-    exp2(-1.0 * user_interaction_animation_rate * mu->time.delta_seconds));
+    if (scroller_data->scrollbar_is_being_dragged)
+    {
+      scroller_data->content_top_y =
+        (ui->pointer_position.y - scrollbar.rect.y0) * content_y_from_scrollbar_y;
+      // allow bounce by allowing to move slightly beyond
+      scroller_data->content_top_y =
+        max_f(scroller_data->content_top_y,
+              scroller_data->content_min_top_y - visible_content_size_y / 2.0);
+      scroller_data->content_top_y =
+        min_f(scroller_data->content_top_y,
+              scroller_data->content_max_top_y + visible_content_size_y / 2.0);
+      scroller_data->content_user_top_y = scroller_data->content_top_y;
+    }
 
-  if (scroller_data->scrollbar_alpha > 0.1)
-  {
-    md2_ui_rect(ui, scrollbar_content_handle,
-                nvgRGBA(255, 255, 255, scroller_data->scrollbar_alpha));
+    if (scroller_data->scrollbar_is_being_dragged)
+    {
+      scroller_data->scrollbar_user_alpha = 255;
+    }
+    else if (scroller_data->content_top_y != scroller_data->content_user_top_y)
+    {
+      scroller_data->scrollbar_user_alpha = 255;
+    }
+    else if (rect_intersects(fade_in_rect, ui->pointer_position))
+    {
+      scroller_data->scrollbar_user_alpha = 255;
+    }
+    else if (!rect_intersects(fade_out_rect, ui->pointer_position))
+    {
+      scroller_data->scrollbar_user_alpha = 0;
+    }
+
+    float user_interaction_animation_rate = 3.0;
+    scroller_data->scrollbar_alpha = interpolate_linear_f(
+      scroller_data->scrollbar_user_alpha, scroller_data->scrollbar_alpha,
+      exp2(-1.0 * user_interaction_animation_rate * mu->time.delta_seconds));
+
+    if (scroller_data->scrollbar_alpha > 0.1)
+    {
+      md2_ui_rect(ui, scrollbar_content_handle,
+                  nvgRGBA(255, 255, 255, scroller_data->scrollbar_alpha));
+    }
   }
 
   nvgResetScissor(md2_ui_vg(ui, element));
@@ -578,7 +561,7 @@ bool md2_ui_scroller_get_element(MD2_UserInterface* ui,
                                  MD2_UIScrollableContent* scroller_data,
                                  MD2_UIElement scroller_element,
                                  MD2_UIRegion* content,
-                                 void* data,
+                                 void const* data,
                                  MD2_UIElement* d_element)
 {
   MD2_UIElement element = md2_ui_region_get_element(content, data);
@@ -592,11 +575,451 @@ bool md2_ui_scroller_get_element(MD2_UserInterface* ui,
   return true;
 }
 
+static void atomic_store_uint32(uint32_t* d_y, uint32_t x)
+{
+  *d_y = x;
+}
+
+static uint32_t atomic_load_uint32(uint32_t const* s_x)
+{
+  return *s_x;
+}
+
+enum
+{
+  DirectoryListing_None,
+  DirectoryListing_InProgress,
+  DirectoryListing_Done,
+  DirectoryListing_Cancelled,
+  DirectoryListing_Error
+};
+
+// @todo make the listing task be a series of tasks working one page at a time, to allow
+// concurrent listing and display as well as give a natural way to cancel and tear down
+// the listing when needed.
+typedef struct DirectoryListing
+{
+  uint32_t state;
+  char* error;
+  char error_buffer[256];
+  uint64_t start_tick;
+  uint64_t end_tick;
+  TempAllocator allocator;
+  char* root_abspath;
+  size_t files_n;
+  char** files;
+  size_t dirs_n;
+  char** dirs;
+} DirectoryListing;
+
+void directory_listing_cleanup_on_cancellation_task(void* data_)
+{
+  DirectoryListing* listing = data_;
+  if (atomic_load_uint32(&listing->state) == DirectoryListing_Cancelled)
+  {
+    // @todo cleanup memory
+    temp_allocator_free(&listing->allocator);
+  }
+}
+
+#if defined(_WIN32)
+void win32_query_directory(DirectoryListing* listing)
+{
+  char const* query_fmt = "%s\\*";
+  char* query = temp_sprintf(&listing->allocator, query_fmt, listing->root_abspath);
+
+  WIN32_FIND_DATAA CurrentFileAttributes;
+  HANDLE SearchHandle = FindFirstFileA(query, &CurrentFileAttributes);
+  if (!SearchHandle || ((void*)(intptr_t)(-1)) == SearchHandle)
+    return;
+  char** files_buf = NULL;
+  do
+  {
+    DWORD attrs = CurrentFileAttributes.dwFileAttributes;
+    if (attrs & FILE_ATTRIBUTE_DEVICE)
+      continue;
+    if (attrs & FILE_ATTRIBUTE_HIDDEN)
+      continue;
+    if (attrs & FILE_ATTRIBUTE_INTEGRITY_STREAM)
+      continue;
+    if (attrs & FILE_ATTRIBUTE_OFFLINE)
+      continue;
+    if (attrs & FILE_ATTRIBUTE_SYSTEM)
+      continue;
+    if (attrs & FILE_ATTRIBUTE_TEMPORARY)
+      continue;
+
+    if (!(attrs & FILE_ATTRIBUTE_DIRECTORY))
+    {
+      buf_push(
+        files_buf, strdup_temp(CurrentFileAttributes.cFileName, &listing->allocator));
+    }
+  } while (FindNextFileA(SearchHandle, &CurrentFileAttributes));
+  FindClose(SearchHandle);
+  listing->files_n = buf_len(files_buf);
+  listing->files = temp_memdup_range(&listing->allocator, &files_buf[0], buf_end(files_buf));
+}
+#endif
+
+void directory_listing_task(void* data_)
+{
+  DirectoryListing* listing = data_;
+  atomic_store_uint32(&listing->state, DirectoryListing_InProgress);
+#if defined(_WIN32)
+  win32_query_directory(listing);
+#else
+#error "Implement me"
+#endif
+  atomic_store_uint32(&listing->state, DirectoryListing_Done);
+}
+
+void directory_listing_make(DirectoryListing* listing, char const* root_dir_path)
+{
+  bool rp_error;
+#if defined(_WIN32)
+  char* rp = win32_realpath(
+    root_dir_path, &rp_error, listing->error_buffer, sizeof listing->error_buffer);
+#else
+  char* rp = posix_realpath(
+    root_dir_path, &rp_error, listing->error_buffer, sizeof listing->error_buffer);
+#endif
+  if (rp_error)
+  {
+    listing->state = DirectoryListing_Error;
+    return;
+  }
+  listing->root_abspath = strdup_temp(rp, &listing->allocator);
+
+  TaskHandle task = task_create(directory_listing_task, listing);
+  task_depends(
+    task, task_create(directory_listing_cleanup_on_cancellation_task, listing));
+  task_start(task);
+}
+
+bool directory_listing_same_dir(DirectoryListing* listing, char const* other_path)
+{
+  bool rp_error;
+#if defined(_WIN32)
+  char* rp = win32_realpath(other_path, &rp_error, NULL, 0);
+#else
+  char* rp = posix_realpath(other_path, &rp_error, NULL, 0);
+#endif
+  if (rp_error)
+    return false;
+  return strcmp(listing->root_abspath, rp) == 0;
+}
+
+void directory_listing_free(DirectoryListing* listing)
+{
+  assert(listing->state != DirectoryListing_InProgress);
+  if (atomic_load_uint32(&listing->state) == DirectoryListing_InProgress)
+  {
+    atomic_store_uint32(&listing->state, DirectoryListing_Cancelled);
+    // @todo @defect interrupt and wait for task if it's running, otherwise detach if it
+    // does not respond
+    // @todo @defect it would be a defect for the UI to wait, so detaching the data and
+    // having a cleanup task is the surest.
+    return; // will crash if we free the memory
+  }
+  temp_allocator_free(&listing->allocator);
+}
+
+static Map /* path to DirectoryListing* */ g_directory_listings;
+
+DirectoryListing* directory_listing_get(char const* directory_path, uint64_t start_tick)
+{
+  uint64_t key_hash = hash_bytes(directory_path, strlen(directory_path));
+  DirectoryListing* listing = map_get(&g_directory_listings, key_hash);
+  if (!listing || !directory_listing_same_dir(listing, directory_path))
+  {
+    if (listing)
+    {
+      directory_listing_free(listing);
+      free(listing), listing = NULL;
+    }
+    listing = calloc(1, sizeof *listing);
+    directory_listing_make(listing, directory_path);
+    listing->start_tick = start_tick;
+    map_put(&g_directory_listings, key_hash, listing);
+  }
+  return listing;
+}
+
+typedef struct MD2_UIList
+{
+  Map selection_indices_set; // all element indices belonging to the selection
+  uint64_t anchor_index;
+  MD2_Point2 press_point;
+  MD2_Rect2 press_element_rect;
+  bool in_drag_gesture;
+} MD2_UIList;
+
+// Right-Exclusive
+typedef enum SelectionRangeOp {
+  SelectionRangeOp_None,
+  SelectionRangeOp_Replace,
+  SelectionRangeOp_Merge,
+} SelectionRangeOp;
+
+typedef struct SelectionRange
+{
+  SelectionRangeOp op;
+  size_t first_index;
+  size_t last_index;
+} SelectionRange;
+
+SelectionRange ui_list_element_process_input(MD2_UserInterface* ui,
+                                             MD2_UIList* list,
+                                             MD2_UIElement element,
+                                             size_t element_index)
+{
+  // @todo @defect this isn't really up to the standard spec for a multiselection
+  // mechanism. that'll do for now.
+  if (!rect_intersects(element.rect, ui->pointer_position))
+    return (SelectionRange){0};
+
+  SelectionRangeOp op =
+    ui->mu->keys[MU_CTRL].down ? SelectionRangeOp_Merge : SelectionRangeOp_Replace;
+
+  if (ui->mu->mouse.left_button.released)
+  {
+    if (ui->mu->keys[MU_SHIFT].down)
+    {
+      // range selection
+      size_t selection_min_i = min_i(list->anchor_index, element_index);
+      size_t selection_max_i = max_i(list->anchor_index, element_index);
+      return (SelectionRange){op, selection_min_i, selection_max_i + 1};
+    }
+    else
+    {
+      list->anchor_index = element_index;
+      return (SelectionRange){op, element_index, element_index + 1};
+    }
+  }
+
+  return (SelectionRange){0};
+}
+
+void ui_directory_listing_element_draw(MD2_UserInterface* ui,
+                                       MD2_UIElement element,
+                                       char const* filename)
+{
+  NVGcontext* vg = md2_ui_vg(ui, element);
+  nvgFillColor(vg, nvgRGBA(255, 255, 255, 255));
+  nvgTextAlign(vg, NVG_ALIGN_BOTTOM);
+  md2_ui_textf(ui, element, "%s", filename);
+  nvgTextAlign(vg, NVG_ALIGN_BASELINE); // back to default
+}
+
+void ui_directory_listing(MD2_UserInterface* ui,
+                          MD2_UIElement element,
+                          MD2_UIList* list,
+                          MD2_UIScrollableContent* scroller_state,
+                          char const* directory_path)
+{
+  DirectoryListing const* listing =
+    directory_listing_get(directory_path, ui->mu->time.ticks);
+  bool listing_is_done = atomic_load_uint32(&listing->state) & DirectoryListing_Done;
+
+  NVGcontext* vg = md2_ui_vg(ui, element);
+  float font_size = 14.0;
+  float default_font_size = 16.0; // @todo global
+  MD2_UIRegion list_content = {0};
+
+  md2_ui_region_start(&list_content);
+  if (listing_is_done)
+  {
+    float row_y = 0.0;
+    nvgFontSize(vg, font_size);
+    for (size_t file_i = 0; file_i < listing->files_n; file_i++)
+    {
+      char const* filename = listing->files[file_i];
+      md2_ui_region_add(&list_content,
+                        (MD2_UIElement){.rect = {.x0 = 0.0,
+                                                 .x1 = element.rect.x1 - element.rect.x0,
+                                                 .y0 = row_y,
+                                                 .y1 = row_y + font_size}},
+                        filename);
+      row_y += font_size;
+    }
+  }
+  md2_ui_region_end(&list_content);
+
+  MD2_UIElement file_list_scroller = element;
+  file_list_scroller.rect.y1 -= default_font_size; // @todo status height
+  file_list_scroller.rect = rect_make_valid(file_list_scroller.rect);
+  // @todo we're not checking if the content escapes the element
+
+  md2_ui_rect(ui, element, nvgRGBA(160, 160, 160, 128)); // debug
+  nvgFillColor(vg, nvgRGBA(255, 255, 255, 255));
+  md2_ui_scroller_start(ui, scroller_state, &list_content, file_list_scroller);
+  if (listing_is_done)
+  {
+    for (size_t file_i = 0; file_i < listing->files_n; file_i++)
+    {
+      char const* filename = listing->files[file_i];
+      MD2_UIElement list_element;
+      if (md2_ui_scroller_get_element(ui, scroller_state, file_list_scroller,
+                                      &list_content, filename, &list_element))
+      {
+        SelectionRange selection =
+          ui_list_element_process_input(ui, list, list_element, file_i);
+        bool element_is_selected =
+          map_get(&list->selection_indices_set, hash_ptr(filename));
+        if (element_is_selected)
+        {
+          md2_ui_rect(ui, list_element, nvgRGBA(160, 160, 160, 128));
+        }
+        ui_directory_listing_element_draw(ui, list_element, filename);
+        if (list->in_drag_gesture && element_is_selected)
+        {
+          MD2_UIElement drag_element = list_element;
+          drag_element.layer = 1;
+          drag_element.rect = rect_translate(
+            list_element.rect, vec_make(list->press_point, ui->pointer_position));
+          ui_directory_listing_element_draw(ui, drag_element, filename);
+        }
+        if (rect_intersects(list_element.rect, ui->pointer_position))
+        {
+          md2_ui_rect(ui, list_element, nvgRGBA(255, 160, 160, 128));
+
+          if (ui->mu->mouse.left_button.pressed)
+          {
+            list->press_point = ui->pointer_position; // @todo @ux project that point into
+                                                      // the box, so that it's magnetized
+                                                      // to it
+            list->press_element_rect = list_element.rect;
+          }
+          else if (list->in_drag_gesture == false && ui->mu->mouse.left_button.down
+                   && sqdistance2(list->press_point, ui->pointer_position)
+                        >= 16.0 /* @todo drag distance threshold magic number */)
+          {
+            list->in_drag_gesture = true;
+            ui->drag.started = true;
+            ui->drag.running = true;
+            assert(buf_len(ui->drag.payload_allocator.regions) == 0);
+            if (!element_is_selected)
+            {
+              list->anchor_index = file_i;
+              selection.op = SelectionRangeOp_Replace;
+              selection.first_index = file_i;
+              selection.last_index = file_i + 1;
+            }
+          }
+        }
+        if (selection.op == SelectionRangeOp_Replace)
+        {
+          map_free(&list->selection_indices_set);
+        }
+        for (size_t file_to_select_i = selection.first_index;
+             file_to_select_i < selection.last_index; file_to_select_i++)
+        {
+          char const* filename = listing->files[file_to_select_i];
+          map_put(&list->selection_indices_set, hash_ptr(filename), (void*)(intptr_t)1);
+        }
+      }
+    }
+
+    if (list->in_drag_gesture && ui->drag.started)
+    {
+      char** filepath_list = NULL;
+      for (size_t file_i = 0;
+        file_i < listing->files_n; file_i++)
+      {
+        char const* filename = listing->files[file_i];
+        if (map_get(&list->selection_indices_set, hash_ptr(filename))) {
+          buf_push(filepath_list, temp_memdup_range(&ui->drag.payload_allocator, filename, filename + strlen(filename) + 1));
+        }
+      }
+
+      map_put(&ui->drag.payload_by_type, MD2_PayloadType_FilePathList, temp_memdup_range(&ui->drag.payload_allocator, filepath_list, buf_end(filepath_list)));
+      buf_free(filepath_list);
+    }
+  }
+  md2_ui_scroller_end(ui, scroller_state, &list_content, file_list_scroller);
+
+  if (list->in_drag_gesture && ui->mu->mouse.left_button.released)
+  {
+    list->in_drag_gesture = false;
+    ui->drag.ended = true;
+  }
+
+  if (ui->drag.ended) {
+    ui->drag.running = false;
+  }
+
+  nvgFillColor(vg, nvgRGBA(255, 255, 255, 255));
+  nvgTextAlign(vg, NVG_ALIGN_BOTTOM);
+  nvgFontSize(vg, default_font_size);
+  if (listing_is_done)
+  {
+    md2_ui_textf(
+      ui, element, "Directory %s (Found %d)", listing->root_abspath, listing->files_n);
+  }
+  else
+  {
+    md2_ui_textf(ui, element, "Directory %s (Listing)", listing->root_abspath);
+  }
+  nvgTextAlign(vg, NVG_ALIGN_BASELINE); // back to default
+
+  md2_ui_region_free(&list_content);
+}
+
+
+#if defined(_WIN32)
+typedef DPI_AWARENESS_CONTEXT /*WINAPI*/ (SetThreadDpiAwarenessContextFn)(
+  DPI_AWARENESS_CONTEXT dpiContext);
+typedef UINT /*WINAPI*/ (GetDpiForWindowFn)(HWND hwnd);
+
+typedef struct Windows10DpiFunctions
+{
+  SetThreadDpiAwarenessContextFn* SetThreadDpiAwarenessContext;
+  GetDpiForWindowFn* GetDpiForWindow;
+} Windows10DpiFunctions;
+
+static Windows10DpiFunctions g_windows10_dpi_functions;
+#endif
+
+typedef struct WindowMetrics
+{
+  float device_px_per_ref_points;
+  struct Mu_Int2 window_size;
+  float dpi;
+} WindowMetrics;
+
+static WindowMetrics get_window_metrics(struct Mu* mu)
+{
+  WindowMetrics metrics = {
+    .device_px_per_ref_points = 1.0f,
+    .window_size = mu->window.size,
+    .dpi = 96.0,
+  };
+#if defined(_WIN32)
+  if (g_windows10_dpi_functions.GetDpiForWindow)
+  {
+    UINT Dpi = g_windows10_dpi_functions.GetDpiForWindow(mu->win32->window);
+    metrics.device_px_per_ref_points = Dpi / 96.0;
+    metrics.dpi = Dpi;
+  }
+#endif
+  return metrics;
+}
+
 int main(int argc, char const* argv[])
 {
 // @todo @platform{win32}
 #if defined(_WIN32)
-  SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+  HANDLE user32_module = LoadLibraryA("user32.dll");
+  g_windows10_dpi_functions.SetThreadDpiAwarenessContext =
+    (SetThreadDpiAwarenessContextFn*)GetProcAddress(
+      user32_module, "SetThreadDpiAwarenessContext");
+  g_windows10_dpi_functions.GetDpiForWindow =
+    (GetDpiForWindowFn*)GetProcAddress(user32_module, "GetDpiForWindow");
+  if (g_windows10_dpi_functions.SetThreadDpiAwarenessContext)
+  {
+    g_windows10_dpi_functions.SetThreadDpiAwarenessContext(
+      DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+  }
 #endif
 
   // libs:
@@ -635,7 +1058,7 @@ int main(int argc, char const* argv[])
 
   if (!posix_is_dir(user_library_path))
   {
-    md2_fatal("--user-library <dir> expected (%s not recognized as directory)",
+    md2_fatal("--user-library <dir> expected ('%s' not recognized as directory)",
               user_library_path);
   }
 
@@ -709,9 +1132,9 @@ int main(int argc, char const* argv[])
       .x = mu.window.size.x / ui.pixel_ratio, .y = mu.window.size.y / ui.pixel_ratio};
     md2_ui_update(&ui);
 
-    int files_n = buf_len(audiofile_tasks);
-    int loaded_n = 0;
-    int bytes_n = 0;
+    size_t files_n = buf_len(audiofile_tasks);
+    size_t loaded_n = 0;
+    size_t bytes_n = 0;
     for (LoadAudioTask **task_i = &audiofile_tasks[0], **task_l = &task_i[files_n];
          task_i < task_l; task_i++)
     {
@@ -730,24 +1153,42 @@ int main(int argc, char const* argv[])
       nvgFontSize(vg, font_size);
       nvgFillColor(vg, nvgRGBA(255, 192, 0, 255));
       float row_y = font_size + 20;
-      md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = 20, .y1 = row_y}},
+      float col_x = 20;
+      md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = col_x, .y1 = row_y}},
                    "User Library %s%s", user_library_path,
                    !posix_is_dir(user_library_path) ? " (offline)" : ""),
         row_y += font_size;
-      md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = 20, .y1 = row_y}}, "Audiofiles:"),
+      md2_ui_textf(
+        &ui, (MD2_UIElement){.rect = {.x0 = col_x, .y1 = row_y}}, "Audiofiles:"),
         row_y += font_size;
 
-      md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = 30, .y1 = row_y}}, "%d / %d",
+      col_x += 10;
+      md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = col_x, .y1 = row_y}}, "%d / %d",
                    loaded_n, files_n),
         row_y += font_size;
 
-      md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = 30, .y1 = row_y}}, "%s bytes",
+      md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = col_x, .y1 = row_y}}, "%s bytes",
                    temp_str_nicenumber(bytes_n, &temp_allocator)),
         row_y += font_size;
-
+      col_x -= 10;
 
       row_y += 10;
 
+      MD2_Rect2 inner_bounds = rect_expand(ui.bounds, (MD2_Vec2){-10, -10});
+      MD2_UIElement directory_listing_element = {
+        .rect = rect_intersection(
+          inner_bounds,
+          (MD2_Rect2){
+            .x0 = col_x, .x1 = col_x + 320, .y0 = row_y, .y1 = inner_bounds.y1}),
+      };
+      {
+        static MD2_UIScrollableContent file_content = {0};
+        static MD2_UIList file_list_state = {0};
+        ui_directory_listing(&ui, directory_listing_element, &file_list_state,
+                             &file_content, user_library_path);
+      }
+
+      col_x = directory_listing_element.rect.x1 + 10;
       {
         MD2_UIRegion audiofile_list_content = {0};
         {
@@ -777,7 +1218,12 @@ int main(int argc, char const* argv[])
 
         MD2_UIElement scroller_element = {
           .rect = rect_translate_within(ui.bounds, audiofile_list_content.bounds,
-                                        (MD2_Point2){30, row_y}, (MD2_Vec2){10, 10})};
+                                        (MD2_Point2){col_x, row_y}, (MD2_Vec2){10, 10})};
+        scroller_element.rect.x1 = max_f(min_f(scroller_element.rect.x0 + 40, ui.bounds.x1), scroller_element.rect.x1);
+        scroller_element.rect.y1 = ui.bounds.y1 - 10;
+        md2_ui_rect(&ui, scroller_element, nvgRGBA(128, 128, 128, 128));
+        md2_ui_rect(&ui, scroller_element, nvgRGBA(160, 160, 160, 128)); // debug
+
         md2_ui_scroller_start(
           &ui, &audiofile_list, &audiofile_list_content, scroller_element);
         for (size_t loaded_i = 0; loaded_i < loaded_n; loaded_i++)
@@ -795,6 +1241,11 @@ int main(int argc, char const* argv[])
           &ui, &audiofile_list, &audiofile_list_content, scroller_element);
 
         md2_ui_region_free(&audiofile_list_content);
+
+        if (ui.drag.running && rect_intersects(scroller_element.rect, ui.pointer_position))
+        {
+          md2_ui_rect(&ui, scroller_element, nvgRGBA(128, 128, 128, 128));
+        }
       }
 
       temp_allocator_free(&temp_allocator);
