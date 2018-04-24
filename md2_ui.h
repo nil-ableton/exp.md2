@@ -1,8 +1,8 @@
 #ifndef MD2_UI
 #define MD2_UI
 
+#include "libs/xxxx_map.h"      // @todo modularity?
 #include "md2_temp_allocator.h" // @todo modularity?
-#include "libs/xxxx_map.h" // @todo modularity?
 
 #include <float.h>
 
@@ -24,8 +24,7 @@ typedef struct MD2_Rect2
 struct Mu;
 struct NVGcontext;
 
-typedef enum MD2_PayloadType
-{
+typedef enum MD2_PayloadType {
   MD2_PayloadType_None = 0,
   MD2_PayloadType_FilePathList = 1,
 } MD2_PayloadType;
@@ -39,15 +38,30 @@ typedef struct MD2_DragGesture
   Map payload_by_type;
 } MD2_DragGesture;
 
+typedef struct MD2_Pointer
+{
+  bool clicked;
+  bool double_clicked;
+  MD2_Point2 position;
+  MD2_Point2 last_press_position;
+  float last_press_seconds;
+  MD2_Point2 last_click_position;
+  float last_click_seconds;
+  MD2_DragGesture drag;
+} MD2_Pointer;
+
 typedef struct MD2_UserInterface
 {
   // User supplied on update:
   MD2_Vec2 size;
   float pixel_ratio;
 
+  // User configuration for input processing:
+  float double_click_max_seconds;
+  float pointer_area;
+
   // input processing
-  MD2_Point2 pointer_position;
-  MD2_DragGesture drag;
+  MD2_Pointer pointer;
 
   // UI State
   MD2_Rect2 bounds;

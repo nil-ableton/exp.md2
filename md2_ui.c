@@ -5,12 +5,61 @@
 
 #include <stdarg.h>
 
+static void md2_ui__update_pointer(MD2_Pointer* pointer,
+                                   struct Mu const* mu,
+                                   MD2_UserInterface const* ui)
+{
+  pointer->drag.started = false;
+  pointer->drag.ended = false;
+
+  if (mu->mouse.left_button.released)
+  {
+    pointer->drag.ended = true;
+    pointer->drag.running = false;
+  }
+
+  pointer->position = (MD2_Point2){
+    .x = mu->mouse.position.x / ui->pixel_ratio,
+    .y = mu->mouse.position.y / ui->pixel_ratio,
+  };
+  if (mu->mouse.left_button.pressed)
+  {
+    pointer->last_press_position = ui->pointer.position;
+    pointer->last_press_seconds = mu->time.seconds;
+    if ((mu->time.seconds - pointer->last_click_seconds) < ui->double_click_max_seconds)
+    {
+      pointer->double_clicked = true;
+    }
+  }
+  if (mu->mouse.left_button.released)
+  {
+    pointer->clicked = true;
+    pointer->last_click_position = pointer->last_press_position;
+    pointer->last_click_seconds = pointer->last_press_seconds;
+  }
+  if (mu->mouse.left_button.down)
+  {
+    if (!pointer->drag.running
+        && sqdistance2(pointer->last_press_position, pointer->position)
+             < ui->pointer_area)
+    {
+      pointer->drag.started = true;
+      pointer->drag.running = true;
+    }
+  }
+
+  if (pointer->drag.ended)
+  {
+    temp_allocator_free(&pointer->drag.payload_allocator);
+  }
+}
+
 void md2_ui_update(MD2_UserInterface* ui)
 {
-  if (ui->drag.ended)
-  {
-    temp_allocator_free(&ui->drag.payload_allocator);
-  }
+  if (ui->double_click_max_seconds <= 0.0)
+    ui->double_click_max_seconds = 0.200f;
+  if (ui->pointer_area <= 0.0)
+    ui->pointer_area = 4 * 4;
 
   if (ui->frame_started)
   {
@@ -19,18 +68,8 @@ void md2_ui_update(MD2_UserInterface* ui)
     nvgEndFrame(ui->overlay_vg);
   }
 
-  ui->pointer_position = (MD2_Point2) {
-    .x = ui->mu->mouse.position.x / ui->pixel_ratio,
-      .y = ui->mu->mouse.position.y / ui->pixel_ratio,
-  };
-  ui->drag.started = false;
-  ui->drag.ended = false;
-
-  if (ui->mu->mouse.left_button.released)
-  {
-    ui->drag.ended = true;
-    ui->drag.running = false;
-  }
+  struct Mu* mu = ui->mu;
+  md2_ui__update_pointer(&ui->pointer, mu, ui);
 
   nvgBeginFrame(ui->overlay_vg, ui->size.x, ui->size.y, ui->pixel_ratio);
   nvgBeginFrame(ui->vg, ui->size.x, ui->size.y, ui->pixel_ratio);
@@ -286,12 +325,12 @@ void md2_ui_waveform(MD2_UserInterface* ui,
                       .x1 = max_f(c_x + 1, c_x + inc_x),
                       .y0 = element.rect.y0,
                       .y1 = element.rect.y1};
-    if (rect_intersects(rect, ui->pointer_position))
+    if (rect_intersects(rect, ui->pointer.position))
     {
       intersecting_chunk_index = chunk_index;
       intersecting_rect = rect;
     }
-    if (c_x > ui->pointer_position.x)
+    if (c_x > ui->pointer.position.x)
       break;
   }
 

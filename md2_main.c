@@ -2,9 +2,9 @@
 #include "md2_audio.h"
 #include "md2_math.h"
 #include "md2_posix.h"
+#include "md2_temp_allocator.h"
 #include "md2_ui.h"
 #include "md2_win32.h"
-#include "md2_temp_allocator.h"
 
 #include "libs/xxxx_buf.h"
 #include "libs/xxxx_iobuffer.h"
@@ -278,7 +278,9 @@ static inline char* strdup_temp(char const* src, TempAllocator* allocator)
   return dst;
 }
 
-static inline void* temp_memdup_range(TempAllocator* allocator, void const* first, void const* last)
+static inline void* temp_memdup_range(TempAllocator* allocator,
+                                      void const* first,
+                                      void const* last)
 {
   char const* bytes_f = first;
   char const* bytes_l = last;
@@ -414,7 +416,7 @@ void md2_ui_scroller_start(MD2_UserInterface* ui,
   float content_max_top_y =
     max_f(0.0, (content->bounds.y1 - content->bounds.y0) - (rect.y1 - rect.y0));
 
-  if (rect_intersects(rect, ui->pointer_position))
+  if (rect_intersects(rect, ui->pointer.position))
   {
     // Input processing for the list
     scroller_data->content_user_top_y +=
@@ -501,7 +503,7 @@ void md2_ui_scroller_end(MD2_UserInterface* ui,
     if (mu->mouse.left_button.down)
     {
       if (rect_intersects(
-            scrollbar_content_handle_interaction_rect, ui->pointer_position))
+            scrollbar_content_handle_interaction_rect, ui->pointer.position))
       {
         scroller_data->scrollbar_is_being_dragged = true;
       }
@@ -514,7 +516,7 @@ void md2_ui_scroller_end(MD2_UserInterface* ui,
     if (scroller_data->scrollbar_is_being_dragged)
     {
       scroller_data->content_top_y =
-        (ui->pointer_position.y - scrollbar.rect.y0) * content_y_from_scrollbar_y;
+        (ui->pointer.position.y - scrollbar.rect.y0) * content_y_from_scrollbar_y;
       // allow bounce by allowing to move slightly beyond
       scroller_data->content_top_y =
         max_f(scroller_data->content_top_y,
@@ -533,11 +535,11 @@ void md2_ui_scroller_end(MD2_UserInterface* ui,
     {
       scroller_data->scrollbar_user_alpha = 255;
     }
-    else if (rect_intersects(fade_in_rect, ui->pointer_position))
+    else if (rect_intersects(fade_in_rect, ui->pointer.position))
     {
       scroller_data->scrollbar_user_alpha = 255;
     }
-    else if (!rect_intersects(fade_out_rect, ui->pointer_position))
+    else if (!rect_intersects(fade_out_rect, ui->pointer.position))
     {
       scroller_data->scrollbar_user_alpha = 0;
     }
@@ -657,7 +659,8 @@ void win32_query_directory(DirectoryListing* listing)
   } while (FindNextFileA(SearchHandle, &CurrentFileAttributes));
   FindClose(SearchHandle);
   listing->files_n = buf_len(files_buf);
-  listing->files = temp_memdup_range(&listing->allocator, &files_buf[0], buf_end(files_buf));
+  listing->files =
+    temp_memdup_range(&listing->allocator, &files_buf[0], buf_end(files_buf));
 }
 #endif
 
@@ -775,7 +778,7 @@ SelectionRange ui_list_element_process_input(MD2_UserInterface* ui,
 {
   // @todo @defect this isn't really up to the standard spec for a multiselection
   // mechanism. that'll do for now.
-  if (!rect_intersects(element.rect, ui->pointer_position))
+  if (!rect_intersects(element.rect, ui->pointer.position))
     return (SelectionRange){0};
 
   SelectionRangeOp op =
@@ -876,28 +879,25 @@ void ui_directory_listing(MD2_UserInterface* ui,
           MD2_UIElement drag_element = list_element;
           drag_element.layer = 1;
           drag_element.rect = rect_translate(
-            list_element.rect, vec_make(list->press_point, ui->pointer_position));
+            list_element.rect, vec_make(list->press_point, ui->pointer.position));
           ui_directory_listing_element_draw(ui, drag_element, filename);
         }
-        if (rect_intersects(list_element.rect, ui->pointer_position))
+        if (rect_intersects(list_element.rect, ui->pointer.position))
         {
           md2_ui_rect(ui, list_element, nvgRGBA(255, 160, 160, 128));
 
           if (ui->mu->mouse.left_button.pressed)
           {
-            list->press_point = ui->pointer_position; // @todo @ux project that point into
+            list->press_point = ui->pointer.position; // @todo @ux project that point into
                                                       // the box, so that it's magnetized
                                                       // to it
             list->press_element_rect = list_element.rect;
           }
-          else if (list->in_drag_gesture == false && ui->mu->mouse.left_button.down
-                   && sqdistance2(list->press_point, ui->pointer_position)
-                        >= 16.0 /* @todo drag distance threshold magic number */)
+
+          if (ui->pointer.drag.started)
           {
             list->in_drag_gesture = true;
-            ui->drag.started = true;
-            ui->drag.running = true;
-            assert(buf_len(ui->drag.payload_allocator.regions) == 0);
+            assert(buf_len(ui->pointer.drag.payload_allocator.regions) == 0);
             if (!element_is_selected)
             {
               list->anchor_index = file_i;
@@ -920,19 +920,23 @@ void ui_directory_listing(MD2_UserInterface* ui,
       }
     }
 
-    if (list->in_drag_gesture && ui->drag.started)
+    if (list->in_drag_gesture && ui->pointer.drag.started)
     {
+      MD2_DragGesture* drag = &ui->pointer.drag;
       char** filepath_list = NULL;
-      for (size_t file_i = 0;
-        file_i < listing->files_n; file_i++)
+      for (size_t file_i = 0; file_i < listing->files_n; file_i++)
       {
         char const* filename = listing->files[file_i];
-        if (map_get(&list->selection_indices_set, hash_ptr(filename))) {
-          buf_push(filepath_list, temp_memdup_range(&ui->drag.payload_allocator, filename, filename + strlen(filename) + 1));
+        if (map_get(&list->selection_indices_set, hash_ptr(filename)))
+        {
+          buf_push(filepath_list, temp_memdup_range(&drag->payload_allocator, filename,
+                                                    filename + strlen(filename) + 1));
         }
       }
 
-      map_put(&ui->drag.payload_by_type, MD2_PayloadType_FilePathList, temp_memdup_range(&ui->drag.payload_allocator, filepath_list, buf_end(filepath_list)));
+      map_put(&drag->payload_by_type, MD2_PayloadType_FilePathList,
+              temp_memdup_range(
+                &drag->payload_allocator, filepath_list, buf_end(filepath_list)));
       buf_free(filepath_list);
     }
   }
@@ -941,11 +945,6 @@ void ui_directory_listing(MD2_UserInterface* ui,
   if (list->in_drag_gesture && ui->mu->mouse.left_button.released)
   {
     list->in_drag_gesture = false;
-    ui->drag.ended = true;
-  }
-
-  if (ui->drag.ended) {
-    ui->drag.running = false;
   }
 
   nvgFillColor(vg, nvgRGBA(255, 255, 255, 255));
@@ -1219,7 +1218,8 @@ int main(int argc, char const* argv[])
         MD2_UIElement scroller_element = {
           .rect = rect_translate_within(ui.bounds, audiofile_list_content.bounds,
                                         (MD2_Point2){col_x, row_y}, (MD2_Vec2){10, 10})};
-        scroller_element.rect.x1 = max_f(min_f(scroller_element.rect.x0 + 40, ui.bounds.x1), scroller_element.rect.x1);
+        scroller_element.rect.x1 = max_f(
+          min_f(scroller_element.rect.x0 + 40, ui.bounds.x1), scroller_element.rect.x1);
         scroller_element.rect.y1 = ui.bounds.y1 - 10;
         md2_ui_rect(&ui, scroller_element, nvgRGBA(128, 128, 128, 128));
         md2_ui_rect(&ui, scroller_element, nvgRGBA(160, 160, 160, 128)); // debug
@@ -1242,7 +1242,8 @@ int main(int argc, char const* argv[])
 
         md2_ui_region_free(&audiofile_list_content);
 
-        if (ui.drag.running && rect_intersects(scroller_element.rect, ui.pointer_position))
+        if (ui.pointer.drag.running
+            && rect_intersects(scroller_element.rect, ui.pointer.position))
         {
           md2_ui_rect(&ui, scroller_element, nvgRGBA(128, 128, 128, 128));
         }
