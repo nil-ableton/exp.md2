@@ -1015,6 +1015,9 @@ Mu_Bool Mu_LoadAudio(const char* filename, Mu_AudioBuffer* audio)
         buffer_capacity = new_buffer_size;
       }
       buffer = (char*)realloc(buffer, buffer_capacity);
+      if (!buffer) {
+        goto done;
+      }
     }
     BYTE* sample_buffer_pointer;
     sample_buffer->Lock(&sample_buffer_pointer, 0, 0);

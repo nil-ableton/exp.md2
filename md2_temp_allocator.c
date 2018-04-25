@@ -8,8 +8,8 @@ static inline bool region_fits(TempAllocatorRegion* region, size_t added_bytes_n
 void temp_allocator_free(TempAllocator* temp_allocator)
 {
   for (TempAllocatorRegion *region_i = &temp_allocator->regions[0],
-    *region_l = buf_end(temp_allocator->regions);
-    region_i < region_l; region_i++)
+                           *region_l = buf_end(temp_allocator->regions);
+       region_i < region_l; region_i++)
   {
     free(region_i->bytes_f), region_i->bytes_f = NULL;
   }
@@ -18,6 +18,10 @@ void temp_allocator_free(TempAllocator* temp_allocator)
 
 void* temp_calloc(TempAllocator* temp_allocator, size_t n, size_t element_size)
 {
+  if (element_size * n == 0)
+  {
+    return NULL;
+  }
   assert(element_size * n > 0);
   assert(element_size < SIZE_MAX / n); // @todo compare with SQRT_SIZE_MAX
 
@@ -27,8 +31,8 @@ void* temp_calloc(TempAllocator* temp_allocator, size_t n, size_t element_size)
     round_up_multiple_of_pot_uintptr(needed_size, alignment);
 
   if (buf_len(temp_allocator->regions) == 0
-    || buf_end(temp_allocator->regions)[-1].bytes_allocated
-    == buf_end(temp_allocator->regions)[-1].bytes_n)
+      || buf_end(temp_allocator->regions)[-1].bytes_allocated
+           == buf_end(temp_allocator->regions)[-1].bytes_n)
   {
     size_t region_size = max_i(1024 * 1024, aligned_needed_size);
     TempAllocatorRegion new_region = {
@@ -45,4 +49,3 @@ void* temp_calloc(TempAllocator* temp_allocator, size_t n, size_t element_size)
   assert(region->bytes_n - (ptr - region->bytes_f) >= needed_size);
   return ptr;
 }
-

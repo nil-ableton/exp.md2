@@ -5,52 +5,56 @@
 
 #include <stdarg.h>
 
-static void md2_ui__update_pointer(MD2_Pointer* pointer,
-                                   struct Mu const* mu,
-                                   MD2_UserInterface const* ui)
+void md2_ui__update_pointer(MD2_Pointer* pointer,
+                            MD2_UserInterface const* ui,
+                            struct Mu const* mu)
 {
+  // Reset state
+  if (ui->pointer.drag.ended)
+  {
+    temp_allocator_free(&pointer->drag.payload_allocator);
+    map_free(&pointer->drag.payload_by_type);
+    pointer->drag = (MD2_DragGesture){0};
+  }
   pointer->drag.started = false;
   pointer->drag.ended = false;
+  pointer->clicked = false;
+  pointer->double_clicked = false;
 
-  if (mu->mouse.left_button.released)
-  {
-    pointer->drag.ended = true;
-    pointer->drag.running = false;
-  }
-
+  // Compute new state
   pointer->position = (MD2_Point2){
     .x = mu->mouse.position.x / ui->pixel_ratio,
     .y = mu->mouse.position.y / ui->pixel_ratio,
   };
+
   if (mu->mouse.left_button.pressed)
   {
-    pointer->last_press_position = ui->pointer.position;
-    pointer->last_press_seconds = mu->time.seconds;
-    if ((mu->time.seconds - pointer->last_click_seconds) < ui->double_click_max_seconds)
+    if (mu->time.seconds - pointer->last_press_seconds < ui->double_click_max_seconds
+        && sqdistance2(pointer->position, pointer->last_press_position)
+             < ui->drag_gesture_area)
     {
       pointer->double_clicked = true;
     }
+    pointer->last_press_position = pointer->position;
+    pointer->last_press_seconds = mu->time.seconds;
   }
+
   if (mu->mouse.left_button.released)
   {
     pointer->clicked = true;
-    pointer->last_click_position = pointer->last_press_position;
+    pointer->last_click_position = pointer->position;
     pointer->last_click_seconds = pointer->last_press_seconds;
-  }
-  if (mu->mouse.left_button.down)
-  {
-    if (!pointer->drag.running
-        && sqdistance2(pointer->last_press_position, pointer->position)
-             < ui->pointer_area)
-    {
-      pointer->drag.started = true;
-      pointer->drag.running = true;
-    }
+    pointer->drag.ended = pointer->drag.running ? true : false;
+    pointer->drag.running = false;
   }
 
-  if (pointer->drag.ended)
+  if (!pointer->double_clicked && !pointer->clicked && mu->mouse.left_button.down
+      && !pointer->drag.running
+      && sqdistance2(pointer->position, pointer->last_press_position)
+           >= ui->drag_gesture_area)
   {
-    temp_allocator_free(&pointer->drag.payload_allocator);
+    pointer->drag.started = true;
+    pointer->drag.running = true;
   }
 }
 
@@ -58,9 +62,8 @@ void md2_ui_update(MD2_UserInterface* ui)
 {
   if (ui->double_click_max_seconds <= 0.0)
     ui->double_click_max_seconds = 0.200f;
-  if (ui->pointer_area <= 0.0)
-    ui->pointer_area = 4 * 4;
-
+  if (ui->drag_gesture_area <= 0.0)
+    ui->drag_gesture_area = 4 * 4;
   if (ui->frame_started)
   {
     // Stacking order:
@@ -69,13 +72,15 @@ void md2_ui_update(MD2_UserInterface* ui)
   }
 
   struct Mu* mu = ui->mu;
-  md2_ui__update_pointer(&ui->pointer, mu, ui);
+  ui->size = (MD2_Vec2){
+    .x = mu->window.size.x / ui->pixel_ratio, .y = mu->window.size.y / ui->pixel_ratio};
+  md2_ui__update_pointer(&ui->pointer, ui, mu);
 
   nvgBeginFrame(ui->overlay_vg, ui->size.x, ui->size.y, ui->pixel_ratio);
   nvgBeginFrame(ui->vg, ui->size.x, ui->size.y, ui->pixel_ratio);
   ui->frame_started = true;
 
-  ui->bounds = rect_make_point_size((MD2_Point2){0, 0}, ui->size);
+  ui->bounds = rect_from_point_size((MD2_Point2){0, 0}, ui->size);
 }
 
 typedef void(GetBoundsFn)(NVGcontext* vg,
@@ -194,13 +199,13 @@ static void test_rect()
 {
   MD2_Rect2 rect = rect_cover_unit();
 
-  rect = rect_cover_point(rect, (MD2_Point2){2, 3});
+  rect = rect_covering_point(rect, (MD2_Point2){2, 3});
   assert(rect.x0 == 2);
   assert(rect.y0 == 3);
   assert(rect.x1 == 2);
   assert(rect.y1 == 3);
 
-  rect = rect_cover_point(rect, (MD2_Point2){0, 5});
+  rect = rect_covering_point(rect, (MD2_Point2){0, 5});
   assert(rect.x0 == 0);
   assert(rect.y0 == 3);
   assert(rect.x1 == 2);
@@ -208,7 +213,7 @@ static void test_rect()
 
   {
     MD2_Rect2 rect0 = rect;
-    rect = rect_cover(rect_cover_unit(), rect);
+    rect = rect_covering(rect_cover_unit(), rect);
     assert(rect.x0 == rect0.x0);
     assert(rect.y0 == rect0.y0);
     assert(rect.x1 == rect0.x1);
@@ -217,7 +222,7 @@ static void test_rect()
 
   {
     MD2_Rect2 rect0 = rect;
-    rect = rect_cover(rect, rect_cover_unit());
+    rect = rect_covering(rect, rect_cover_unit());
     assert(rect.x0 == rect0.x0);
     assert(rect.y0 == rect0.y0);
     assert(rect.x1 == rect0.x1);

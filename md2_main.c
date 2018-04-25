@@ -1,3 +1,11 @@
+// @todo memory management of paths is a bit icky. strdup is a smell
+// @todo iterating multiple times on directory listing entries is fishy: if I have a
+// sequential domain from which to select from, then it should be convenient to scan
+// through it
+// @todo too much stuff is being done locally rather than globally left to the UI to
+// decide
+// @todo non-overlapping boxes layout at the top level
+
 #include "md1_support.h"
 #include "md2_audio.h"
 #include "md2_math.h"
@@ -73,7 +81,7 @@ int comp_uint64(const void* a_ptr, const void* b_ptr)
 
 MD1_EntityCatalog md1_song_load(char const* path)
 {
-  IOBuffer reader = iobuffer_file_reader("test_assets/md1_songs.bin");
+  IOBuffer reader = iobuffer_file_reader(path);
   MD1_Loader loader = {
     .input = &reader,
   };
@@ -271,7 +279,7 @@ void load_md1_file(LoadAudioTask* load_audio_task)
   load_audio_task->success = success;
 }
 
-static inline char* strdup_temp(char const* src, TempAllocator* allocator)
+static inline char* temp_strdup(char const* src, TempAllocator* allocator)
 {
   char* dst = temp_calloc(allocator, strlen(src) + 1, 1);
   strcpy(dst, src);
@@ -358,7 +366,7 @@ void md2_ui_region_start(MD2_UIRegion* region)
 
 void md2_ui_region_end(MD2_UIRegion* region)
 {
-  region->bounds = rect_make_valid(region->bounds);
+  region->bounds = rect_made_valid(region->bounds);
 }
 
 void md2_ui_region_free(MD2_UIRegion* region)
@@ -372,7 +380,7 @@ void md2_ui_region_add(MD2_UIRegion* region, MD2_UIElement element, void const* 
   assert(data);
   size_t element_index = buf_len(region->elements_buf);
   buf_push(region->elements_buf, element);
-  region->bounds = rect_cover(region->bounds, element.rect);
+  region->bounds = rect_covering(region->bounds, element.rect);
   map_put(
     &region->element_index_by_data, (intptr_t)data, (void*)(uintptr_t)element_index);
 }
@@ -392,6 +400,7 @@ typedef struct MD2_UIScrollableContent
   float scrollbar_user_alpha;
   float scrollbar_alpha; // @animated from scrollbar_user_alpha
   bool scrollbar_is_being_dragged;
+  MD2_Vec2 scrollbar_handle_top_relative_to_drag_point;
 } MD2_UIScrollableContent;
 
 MD2_Rect2 rect_translate_within(MD2_Rect2 bounds,
@@ -399,10 +408,14 @@ MD2_Rect2 rect_translate_within(MD2_Rect2 bounds,
                                 MD2_Point2 new_origin,
                                 MD2_Vec2 margin_size)
 {
-  MD2_Rect2 max_rect = rect_expand(bounds, (MD2_Vec2){-margin_size.x, -margin_size.y});
-  return rect_intersection(
-    max_rect, rect_translate(rect, to_point_from_origin(new_origin)));
+  MD2_Rect2 max_rect = rect_expanded(bounds, (MD2_Vec2){-margin_size.x, -margin_size.y});
+  return rect_intersection(max_rect, rect_translated(rect, vec_to_point(new_origin)));
 }
+
+enum
+{
+  SCROLLBAR_HANDLE_SIZE_X = 10
+};
 
 void md2_ui_scroller_start(MD2_UserInterface* ui,
                            MD2_UIScrollableContent* scroller_data,
@@ -462,6 +475,7 @@ void md2_ui_scroller_start(MD2_UserInterface* ui,
              element.rect.x1 - element.rect.x0, element.rect.y1 - element.rect.y0);
 }
 
+
 void md2_ui_scroller_end(MD2_UserInterface* ui,
                          MD2_UIScrollableContent* scroller_data,
                          MD2_UIRegion* content,
@@ -474,7 +488,7 @@ void md2_ui_scroller_end(MD2_UserInterface* ui,
     MD2_UIElement scrollbar = {
       .rect = element.rect,
     };
-    scrollbar.rect.x0 = scrollbar.rect.x1 - 10;
+    scrollbar.rect.x0 = scrollbar.rect.x1 - SCROLLBAR_HANDLE_SIZE_X;
 
     MD2_UIElement scrollbar_content_handle = scrollbar;
     float content_y_from_scrollbar_y = 1.0;
@@ -495,28 +509,33 @@ void md2_ui_scroller_end(MD2_UserInterface* ui,
         + normalized_content_bottom * (scrollbar.rect.y1 - scrollbar.rect.y0);
     }
 
-    MD2_Rect2 fade_in_rect = rect_expand(scrollbar.rect, (MD2_Vec2){5, 0});
-    MD2_Rect2 fade_out_rect = rect_expand(scrollbar.rect, (MD2_Vec2){10, 0});
+    MD2_Rect2 fade_in_rect = rect_expanded(scrollbar.rect, (MD2_Vec2){5, 0});
+    MD2_Rect2 fade_out_rect = rect_expanded(scrollbar.rect, (MD2_Vec2){10, 0});
 
     MD2_Rect2 scrollbar_content_handle_interaction_rect =
-      rect_expand(scrollbar_content_handle.rect, (MD2_Vec2){4, 4});
-    if (mu->mouse.left_button.down)
+      rect_expanded(scrollbar_content_handle.rect, (MD2_Vec2){4, 4});
+    if (ui->pointer.drag.started)
     {
       if (rect_intersects(
             scrollbar_content_handle_interaction_rect, ui->pointer.position))
       {
         scroller_data->scrollbar_is_being_dragged = true;
+        scroller_data->scrollbar_handle_top_relative_to_drag_point = vec_from_to(
+          ui->pointer.last_press_position, rect_min_point(scrollbar_content_handle.rect));
       }
     }
-    else
+
+    if (ui->pointer.drag.ended)
     {
       scroller_data->scrollbar_is_being_dragged = false;
     }
 
-    if (scroller_data->scrollbar_is_being_dragged)
+    if (scroller_data->scrollbar_is_being_dragged && ui->pointer.drag.running)
     {
+      MD2_Point2 scrollbar_pos = point_translated(
+        ui->pointer.position, scroller_data->scrollbar_handle_top_relative_to_drag_point);
       scroller_data->content_top_y =
-        (ui->pointer.position.y - scrollbar.rect.y0) * content_y_from_scrollbar_y;
+        (scrollbar_pos.y - scrollbar.rect.y0) * content_y_from_scrollbar_y;
       // allow bounce by allowing to move slightly beyond
       scroller_data->content_top_y =
         max_f(scroller_data->content_top_y,
@@ -568,11 +587,19 @@ bool md2_ui_scroller_get_element(MD2_UserInterface* ui,
 {
   MD2_UIElement element = md2_ui_region_get_element(content, data);
   element.rect =
-    rect_translate(element.rect, (MD2_Vec2){0.0, -scroller_data->content_top_y});
-  element.rect = rect_translate(
-    element.rect, to_point_from_origin(rect_min_point(scroller_element.rect)));
+    rect_translated(element.rect, (MD2_Vec2){0.0, -scroller_data->content_top_y});
+  element.rect =
+    rect_translated(element.rect, vec_to_point(rect_min_point(scroller_element.rect)));
   if (!rects_intersect(scroller_element.rect, element.rect))
     return false;
+  if (content->bounds.y1 - content->bounds.y0
+      > scroller_element.rect.y1 - scroller_element.rect.y0)
+  {
+    // reserve space for scrollbar
+    element.rect = rect_translated(
+      rect_expanded(element.rect, (MD2_Vec2){.x = -SCROLLBAR_HANDLE_SIZE_X / 2}),
+      (MD2_Vec2){.x = -SCROLLBAR_HANDLE_SIZE_X / 2});
+  }
   *d_element = element;
   return true;
 }
@@ -599,6 +626,7 @@ enum
 // @todo make the listing task be a series of tasks working one page at a time, to allow
 // concurrent listing and display as well as give a natural way to cancel and tear down
 // the listing when needed.
+
 typedef struct DirectoryListing
 {
   uint32_t state;
@@ -608,10 +636,10 @@ typedef struct DirectoryListing
   uint64_t end_tick;
   TempAllocator allocator;
   char* root_abspath;
-  size_t files_n;
-  char** files;
-  size_t dirs_n;
-  char** dirs;
+  size_t names_n;
+  size_t last_dir_name_n;
+  char const* const*
+    names; // [0..last_dir_name_n) directories, [last_dir_name_n..names_n) files
 } DirectoryListing;
 
 void directory_listing_cleanup_on_cancellation_task(void* data_)
@@ -632,9 +660,14 @@ void win32_query_directory(DirectoryListing* listing)
 
   WIN32_FIND_DATAA CurrentFileAttributes;
   HANDLE SearchHandle = FindFirstFileA(query, &CurrentFileAttributes);
-  if (!SearchHandle || ((void*)(intptr_t)(-1)) == SearchHandle)
+  if (!SearchHandle || ((void*)(intptr_t)(-1)) == SearchHandle) {
+    listing->state = DirectoryListing_Error;
+    snprintf(listing->error_buffer, sizeof listing->error_buffer, "Got Win32 error: 0x%x", GetLastError());
+    listing->error = listing->error_buffer;
     return;
+  }
   char** files_buf = NULL;
+  char** dirs_buf = NULL;
   do
   {
     DWORD attrs = CurrentFileAttributes.dwFileAttributes;
@@ -651,16 +684,28 @@ void win32_query_directory(DirectoryListing* listing)
     if (attrs & FILE_ATTRIBUTE_TEMPORARY)
       continue;
 
-    if (!(attrs & FILE_ATTRIBUTE_DIRECTORY))
+    if ((attrs & FILE_ATTRIBUTE_DIRECTORY))
     {
       buf_push(
-        files_buf, strdup_temp(CurrentFileAttributes.cFileName, &listing->allocator));
+        dirs_buf, temp_strdup(CurrentFileAttributes.cFileName, &listing->allocator));
+    }
+    else
+    {
+      buf_push(
+        files_buf, temp_strdup(CurrentFileAttributes.cFileName, &listing->allocator));
     }
   } while (FindNextFileA(SearchHandle, &CurrentFileAttributes));
   FindClose(SearchHandle);
-  listing->files_n = buf_len(files_buf);
-  listing->files =
-    temp_memdup_range(&listing->allocator, &files_buf[0], buf_end(files_buf));
+  size_t names_n = buf_len(dirs_buf) + buf_len(files_buf);
+  char** names = temp_calloc(&listing->allocator, names_n, sizeof names[0]);
+  size_t last_dir_name_n = buf_len(dirs_buf);
+  memcpy(&names[0], &dirs_buf[0], buf_len(dirs_buf) * sizeof dirs_buf[0]);
+  memcpy(
+    &names[last_dir_name_n], &files_buf[0], buf_len(files_buf) * sizeof files_buf[0]);
+  listing->names = names;
+  listing->names_n = names_n;
+  listing->last_dir_name_n = last_dir_name_n;
+  buf_free(dirs_buf), buf_free(files_buf);
 }
 #endif
 
@@ -691,7 +736,7 @@ void directory_listing_make(DirectoryListing* listing, char const* root_dir_path
     listing->state = DirectoryListing_Error;
     return;
   }
-  listing->root_abspath = strdup_temp(rp, &listing->allocator);
+  listing->root_abspath = temp_strdup(rp, &listing->allocator);
 
   TaskHandle task = task_create(directory_listing_task, listing);
   task_depends(
@@ -728,23 +773,62 @@ void directory_listing_free(DirectoryListing* listing)
 }
 
 static Map /* path to DirectoryListing* */ g_directory_listings;
+typedef struct DirectoryListingEntry
+{
+  char* directory_path_buf;
+  struct DirectoryListing* listing;
+  struct DirectoryListing** collisions;
+} DirectoryListingEntry;
+
+char* buf_make_strdup(char* other)
+{
+  char* buf = NULL;
+  size_t n = strlen(other);
+  buf_fit(buf, n + 1);
+  memcpy(&buf[0], &other[0], n);
+  buf[n] = '\0';
+  return buf;
+}
 
 DirectoryListing* directory_listing_get(char const* directory_path, uint64_t start_tick)
 {
   uint64_t key_hash = hash_bytes(directory_path, strlen(directory_path));
-  DirectoryListing* listing = map_get(&g_directory_listings, key_hash);
-  if (!listing || !directory_listing_same_dir(listing, directory_path))
+  DirectoryListingEntry* listing_entry = map_get(&g_directory_listings, key_hash);
+  if (listing_entry && directory_listing_same_dir(listing_entry->listing, directory_path))
   {
-    if (listing)
-    {
-      directory_listing_free(listing);
-      free(listing), listing = NULL;
-    }
-    listing = calloc(1, sizeof *listing);
-    directory_listing_make(listing, directory_path);
-    listing->start_tick = start_tick;
-    map_put(&g_directory_listings, key_hash, listing);
+    return listing_entry->listing;
   }
+
+  DirectoryListing** d_listing;
+  if (listing_entry)
+  {
+    DirectoryListing** collision_entry;
+    for (collision_entry = &listing_entry->collisions[0];
+         collision_entry < buf_end(listing_entry->collisions)
+         && !directory_listing_same_dir(*collision_entry, directory_path);
+         collision_entry++)
+      ;
+    if (collision_entry < buf_end(listing_entry->collisions))
+    {
+      return *collision_entry;
+    }
+
+    buf_push(listing_entry->collisions, NULL);
+    d_listing = &buf_end(listing_entry->collisions)[-1];
+  }
+  else
+  {
+    listing_entry = calloc(1, sizeof *listing_entry);
+    map_put(&g_directory_listings, key_hash, listing_entry);
+    d_listing = &listing_entry->listing;
+  }
+
+  DirectoryListing* listing = calloc(1, sizeof *listing);
+  directory_listing_make(listing, directory_path);
+  listing->start_tick = start_tick;
+
+  *d_listing = listing;
+
   return listing;
 }
 
@@ -752,8 +836,6 @@ typedef struct MD2_UIList
 {
   Map selection_indices_set; // all element indices belonging to the selection
   uint64_t anchor_index;
-  MD2_Point2 press_point;
-  MD2_Rect2 press_element_rect;
   bool in_drag_gesture;
 } MD2_UIList;
 
@@ -805,23 +887,30 @@ SelectionRange ui_list_element_process_input(MD2_UserInterface* ui,
 
 void ui_directory_listing_element_draw(MD2_UserInterface* ui,
                                        MD2_UIElement element,
-                                       char const* filename)
+                                       char const* name,
+                                       bool is_dir)
 {
   NVGcontext* vg = md2_ui_vg(ui, element);
   nvgFillColor(vg, nvgRGBA(255, 255, 255, 255));
   nvgTextAlign(vg, NVG_ALIGN_BOTTOM);
-  md2_ui_textf(ui, element, "%s", filename);
+  md2_ui_textf(ui, element, "%s%s", name, is_dir ? "/" : "");
   nvgTextAlign(vg, NVG_ALIGN_BASELINE); // back to default
 }
 
-void ui_directory_listing(MD2_UserInterface* ui,
-                          MD2_UIElement element,
-                          MD2_UIList* list,
-                          MD2_UIScrollableContent* scroller_state,
-                          char const* directory_path)
+typedef struct DirectoryListingOperation
+{
+  char const* next_directory_path;
+} DirectoryListingOperation;
+
+DirectoryListingOperation ui_directory_listing(MD2_UserInterface* ui,
+                                               MD2_UIElement element,
+                                               MD2_UIList* list,
+                                               MD2_UIScrollableContent* scroller_state,
+                                               char const* directory_path)
 {
   DirectoryListing const* listing =
     directory_listing_get(directory_path, ui->mu->time.ticks);
+  DirectoryListingOperation result = {.next_directory_path = NULL};
   bool listing_is_done = atomic_load_uint32(&listing->state) & DirectoryListing_Done;
 
   NVGcontext* vg = md2_ui_vg(ui, element);
@@ -834,15 +923,15 @@ void ui_directory_listing(MD2_UserInterface* ui,
   {
     float row_y = 0.0;
     nvgFontSize(vg, font_size);
-    for (size_t file_i = 0; file_i < listing->files_n; file_i++)
+    for (size_t entry_i = 0; entry_i < listing->names_n; entry_i++)
     {
-      char const* filename = listing->files[file_i];
+      char const* name = listing->names[entry_i];
       md2_ui_region_add(&list_content,
                         (MD2_UIElement){.rect = {.x0 = 0.0,
                                                  .x1 = element.rect.x1 - element.rect.x0,
                                                  .y0 = row_y,
                                                  .y1 = row_y + font_size}},
-                        filename);
+                        name);
       row_y += font_size;
     }
   }
@@ -850,7 +939,7 @@ void ui_directory_listing(MD2_UserInterface* ui,
 
   MD2_UIElement file_list_scroller = element;
   file_list_scroller.rect.y1 -= default_font_size; // @todo status height
-  file_list_scroller.rect = rect_make_valid(file_list_scroller.rect);
+  file_list_scroller.rect = rect_made_valid(file_list_scroller.rect);
   // @todo we're not checking if the content escapes the element
 
   md2_ui_rect(ui, element, nvgRGBA(160, 160, 160, 128)); // debug
@@ -858,52 +947,56 @@ void ui_directory_listing(MD2_UserInterface* ui,
   md2_ui_scroller_start(ui, scroller_state, &list_content, file_list_scroller);
   if (listing_is_done)
   {
-    for (size_t file_i = 0; file_i < listing->files_n; file_i++)
+    for (size_t entry_i = 0; entry_i < listing->names_n; entry_i++)
     {
-      char const* filename = listing->files[file_i];
+      char const* name = listing->names[entry_i];
+      bool is_dir = entry_i < listing->last_dir_name_n;
       MD2_UIElement list_element;
-      if (md2_ui_scroller_get_element(ui, scroller_state, file_list_scroller,
-                                      &list_content, filename, &list_element))
+      if (md2_ui_scroller_get_element(
+            ui, scroller_state, file_list_scroller, &list_content, name, &list_element))
       {
         SelectionRange selection =
-          ui_list_element_process_input(ui, list, list_element, file_i);
-        bool element_is_selected =
-          map_get(&list->selection_indices_set, hash_ptr(filename));
+          ui_list_element_process_input(ui, list, list_element, entry_i);
+        bool element_is_selected = map_get(&list->selection_indices_set, hash_ptr(name));
         if (element_is_selected)
         {
           md2_ui_rect(ui, list_element, nvgRGBA(160, 160, 160, 128));
         }
-        ui_directory_listing_element_draw(ui, list_element, filename);
+        ui_directory_listing_element_draw(ui, list_element, name, is_dir);
         if (list->in_drag_gesture && element_is_selected)
         {
           MD2_UIElement drag_element = list_element;
           drag_element.layer = 1;
-          drag_element.rect = rect_translate(
-            list_element.rect, vec_make(list->press_point, ui->pointer.position));
-          ui_directory_listing_element_draw(ui, drag_element, filename);
+          drag_element.rect = rect_translated(
+            list_element.rect,
+            vec_from_to(ui->pointer.last_press_position, ui->pointer.position));
+          ui_directory_listing_element_draw(ui, drag_element, name, is_dir);
         }
         if (rect_intersects(list_element.rect, ui->pointer.position))
         {
           md2_ui_rect(ui, list_element, nvgRGBA(255, 160, 160, 128));
 
-          if (ui->mu->mouse.left_button.pressed)
+          if (ui->pointer.double_clicked && is_dir)
           {
-            list->press_point = ui->pointer.position; // @todo @ux project that point into
-                                                      // the box, so that it's magnetized
-                                                      // to it
-            list->press_element_rect = list_element.rect;
+            assert(result.next_directory_path == NULL);
+            if (result.next_directory_path == NULL)
+            {
+              char* buf = NULL;
+              buf_printf(buf, "%s/%s", listing->root_abspath, name);
+              result.next_directory_path = _strdup(buf);
+              buf_free(buf);
+            }
           }
 
           if (ui->pointer.drag.started)
           {
             list->in_drag_gesture = true;
-            assert(buf_len(ui->pointer.drag.payload_allocator.regions) == 0);
             if (!element_is_selected)
             {
-              list->anchor_index = file_i;
+              list->anchor_index = entry_i;
               selection.op = SelectionRangeOp_Replace;
-              selection.first_index = file_i;
-              selection.last_index = file_i + 1;
+              selection.first_index = entry_i;
+              selection.last_index = entry_i + 1;
             }
           }
         }
@@ -911,38 +1004,48 @@ void ui_directory_listing(MD2_UserInterface* ui,
         {
           map_free(&list->selection_indices_set);
         }
-        for (size_t file_to_select_i = selection.first_index;
-             file_to_select_i < selection.last_index; file_to_select_i++)
+        for (size_t entry_to_select_i = selection.first_index;
+             entry_to_select_i < selection.last_index; entry_to_select_i++)
         {
-          char const* filename = listing->files[file_to_select_i];
-          map_put(&list->selection_indices_set, hash_ptr(filename), (void*)(intptr_t)1);
+          char const* const name = listing->names[entry_to_select_i];
+          map_put(&list->selection_indices_set, hash_ptr(name), (void*)(intptr_t)1);
         }
       }
-    }
-
-    if (list->in_drag_gesture && ui->pointer.drag.started)
-    {
-      MD2_DragGesture* drag = &ui->pointer.drag;
-      char** filepath_list = NULL;
-      for (size_t file_i = 0; file_i < listing->files_n; file_i++)
-      {
-        char const* filename = listing->files[file_i];
-        if (map_get(&list->selection_indices_set, hash_ptr(filename)))
-        {
-          buf_push(filepath_list, temp_memdup_range(&drag->payload_allocator, filename,
-                                                    filename + strlen(filename) + 1));
-        }
-      }
-
-      map_put(&drag->payload_by_type, MD2_PayloadType_FilePathList,
-              temp_memdup_range(
-                &drag->payload_allocator, filepath_list, buf_end(filepath_list)));
-      buf_free(filepath_list);
     }
   }
   md2_ui_scroller_end(ui, scroller_state, &list_content, file_list_scroller);
 
-  if (list->in_drag_gesture && ui->mu->mouse.left_button.released)
+  if (listing_is_done)
+  {
+    if (list->in_drag_gesture && ui->pointer.drag.started)
+    {
+      char** filepath_list = NULL;
+      TempAllocator* d_allocator = &ui->pointer.drag.payload_allocator;
+
+      for (size_t entry_i = 0; entry_i < listing->names_n; entry_i++)
+      {
+        if (entry_i < listing->last_dir_name_n)
+          continue; // ignore dirs
+        char const* const name = listing->names[entry_i];
+        if (map_get(&list->selection_indices_set, hash_ptr(name)))
+        {
+          buf_push(filepath_list,
+                   temp_sprintf(d_allocator, "%s/%s", listing->root_abspath, name));
+        }
+      }
+      if (buf_len(filepath_list) > 0)
+      {
+        FilepathList* d_list = temp_calloc(d_allocator, 1, sizeof *d_list);
+        d_list->paths_n = buf_len(filepath_list);
+        d_list->paths =
+          temp_memdup_range(d_allocator, &filepath_list[0], buf_end(filepath_list));
+        map_put(&ui->pointer.drag.payload_by_type, MD2_PayloadType_FilepathList, d_list);
+      }
+      buf_free(filepath_list);
+    }
+  }
+
+  if (ui->pointer.drag.ended)
   {
     list->in_drag_gesture = false;
   }
@@ -953,7 +1056,7 @@ void ui_directory_listing(MD2_UserInterface* ui,
   if (listing_is_done)
   {
     md2_ui_textf(
-      ui, element, "Directory %s (Found %d)", listing->root_abspath, listing->files_n);
+      ui, element, "Directory %s (Found %d)", listing->root_abspath, listing->names_n);
   }
   else
   {
@@ -962,6 +1065,7 @@ void ui_directory_listing(MD2_UserInterface* ui,
   nvgTextAlign(vg, NVG_ALIGN_BASELINE); // back to default
 
   md2_ui_region_free(&list_content);
+  return result;
 }
 
 
@@ -1002,6 +1106,23 @@ static WindowMetrics get_window_metrics(struct Mu* mu)
   }
 #endif
   return metrics;
+}
+
+LoadAudioTask* md2_load_audio_task_start(char const* path, size_t path_n)
+{
+  LoadAudioTask* task_data = calloc(1, sizeof *task_data);
+  task_data->filename = strdup_range(path, path_n);
+  {
+    // Require waveform data:
+    WaveformData* wv = &task_data->ui_waveform;
+    size_t n = MD2_UI_WAVEFORM_SIZE;
+    wv->len_pot = n;
+    wv->min = calloc(n, sizeof wv->min[0]);
+    wv->max = calloc(n, sizeof wv->max[0]);
+    wv->rms = calloc(n, sizeof wv->rms[0]);
+  }
+  task_start(task_create(load_md1_file, task_data));
+  return task_data;
 }
 
 int main(int argc, char const* argv[])
@@ -1093,42 +1214,28 @@ int main(int argc, char const* argv[])
   }
 
   LoadAudioTask** audiofile_tasks = NULL;
-  if (!md1_song_path[0])
+  if (md1_song_path[0])
   {
     // @todo @defect @leak
     MD1_EntityCatalog entities = md1_song_load(md1_song_path);
     for (MD1_File *file_i = &entities.files[0], *file_l = &file_i[entities.files_n];
          file_i < file_l; file_i++)
     {
-      LoadAudioTask* task_data = calloc(1, sizeof *task_data);
-      task_data->filename = strdup_range(file_i->path, file_i->path_n);
-      {
-        // Require waveform data:
-        WaveformData* wv = &task_data->ui_waveform;
-        size_t n = MD2_UI_WAVEFORM_SIZE;
-        wv->len_pot = n;
-        wv->min = calloc(n, sizeof wv->min[0]);
-        wv->max = calloc(n, sizeof wv->max[0]);
-        wv->rms = calloc(n, sizeof wv->rms[0]);
-      }
-      task_start(task_create(load_md1_file, task_data));
-      buf_push(audiofile_tasks, task_data);
+      buf_push(audiofile_tasks, md2_load_audio_task_start(file_i->path, file_i->path_n));
     }
   }
 
   bool is_first_frame = true;
+  TempAllocator perframe_allocator = {0};
   while (Mu_Push(&mu), Mu_Pull(&mu))
   {
-    TempAllocator temp_allocator = {0};
+    temp_allocator_free(&perframe_allocator);
     float px_ratio = get_window_metrics(&mu).device_px_per_ref_points;
+    ui.pixel_ratio = px_ratio;
+
     glViewport(0, 0, mu.window.size.x, mu.window.size.y);
     glClearColor(0.5f, 0.0f, 1.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-
-    ui.mu = &mu;
-    ui.pixel_ratio = px_ratio;
-    ui.size = (MD2_Vec2){
-      .x = mu.window.size.x / ui.pixel_ratio, .y = mu.window.size.y / ui.pixel_ratio};
     md2_ui_update(&ui);
 
     size_t files_n = buf_len(audiofile_tasks);
@@ -1167,13 +1274,13 @@ int main(int argc, char const* argv[])
         row_y += font_size;
 
       md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = col_x, .y1 = row_y}}, "%s bytes",
-                   temp_str_nicenumber(bytes_n, &temp_allocator)),
+                   temp_str_nicenumber(bytes_n, &perframe_allocator)),
         row_y += font_size;
       col_x -= 10;
 
       row_y += 10;
 
-      MD2_Rect2 inner_bounds = rect_expand(ui.bounds, (MD2_Vec2){-10, -10});
+      MD2_Rect2 inner_bounds = rect_expanded(ui.bounds, (MD2_Vec2){-10, -10});
       MD2_UIElement directory_listing_element = {
         .rect = rect_intersection(
           inner_bounds,
@@ -1183,8 +1290,17 @@ int main(int argc, char const* argv[])
       {
         static MD2_UIScrollableContent file_content = {0};
         static MD2_UIList file_list_state = {0};
-        ui_directory_listing(&ui, directory_listing_element, &file_list_state,
-                             &file_content, user_library_path);
+        static char const* path = NULL;
+        if (!path)
+          path = user_library_path;
+        DirectoryListingOperation result = ui_directory_listing(
+          &ui, directory_listing_element, &file_list_state, &file_content, path);
+        if (result.next_directory_path)
+        {
+          if (path != user_library_path)
+            free(path);
+          path = result.next_directory_path;
+        }
       }
 
       col_x = directory_listing_element.rect.x1 + 10;
@@ -1193,10 +1309,12 @@ int main(int argc, char const* argv[])
         {
           float row_y = 0.0;
           md2_ui_region_start(&audiofile_list_content);
-          for (size_t loaded_i = 0; loaded_i < loaded_n; loaded_i++)
+          for (size_t loaded_i = 0; loaded_i < buf_len(audiofile_tasks); loaded_i++)
           {
-            row_y += 10.0;
             LoadAudioTask* task = audiofile_tasks[loaded_i];
+            if (!task->success)
+              continue;
+            row_y += 10.0;
             md2_ui_region_add(&audiofile_list_content,
                               (MD2_UIElement){
                                 .rect =
@@ -1226,9 +1344,11 @@ int main(int argc, char const* argv[])
 
         md2_ui_scroller_start(
           &ui, &audiofile_list, &audiofile_list_content, scroller_element);
-        for (size_t loaded_i = 0; loaded_i < loaded_n; loaded_i++)
+        for (size_t loaded_i = 0; loaded_i < buf_len(audiofile_tasks); loaded_i++)
         {
           LoadAudioTask* task = audiofile_tasks[loaded_i];
+          if (!task->success)
+            continue;
           MD2_UIElement element;
           if (md2_ui_scroller_get_element(&ui, &audiofile_list, scroller_element,
                                           &audiofile_list_content, &task->ui_waveform,
@@ -1242,14 +1362,30 @@ int main(int argc, char const* argv[])
 
         md2_ui_region_free(&audiofile_list_content);
 
-        if (ui.pointer.drag.running
-            && rect_intersects(scroller_element.rect, ui.pointer.position))
+        if (rect_intersects(scroller_element.rect, ui.pointer.position))
         {
-          md2_ui_rect(&ui, scroller_element, nvgRGBA(128, 128, 128, 128));
+          if (ui.pointer.drag.running)
+          {
+            md2_ui_rect(&ui, scroller_element, nvgRGBA(128, 128, 128, 128));
+          }
+
+          if (ui.pointer.drag.ended)
+          {
+            FilepathList* filepath_list =
+              map_get(&ui.pointer.drag.payload_by_type, MD2_PayloadType_FilepathList);
+            if (filepath_list)
+            {
+              for (char const **path_i = &filepath_list->paths[0],
+                              **path_l = &path_i[filepath_list->paths_n];
+                   path_i < path_l; path_i++)
+              {
+                buf_push(
+                  audiofile_tasks, md2_load_audio_task_start(*path_i, strlen(*path_i)));
+              }
+            }
+          }
         }
       }
-
-      temp_allocator_free(&temp_allocator);
     }
     is_first_frame = false;
   }

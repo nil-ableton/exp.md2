@@ -26,8 +26,14 @@ struct NVGcontext;
 
 typedef enum MD2_PayloadType {
   MD2_PayloadType_None = 0,
-  MD2_PayloadType_FilePathList = 1,
+  MD2_PayloadType_FilepathList = 1,
 } MD2_PayloadType;
+
+typedef struct FilepathList
+{
+  size_t paths_n;
+  char const** paths;
+} FilepathList;
 
 typedef struct MD2_DragGesture
 {
@@ -55,10 +61,8 @@ typedef struct MD2_UserInterface
   // User supplied on update:
   MD2_Vec2 size;
   float pixel_ratio;
-
-  // User configuration for input processing:
   float double_click_max_seconds;
-  float pointer_area;
+  float drag_gesture_area;
 
   // input processing
   MD2_Pointer pointer;
@@ -112,30 +116,35 @@ MD2_ElementAllocator* md2_ui_scope_end(MD2_ElementAllocator* scope);
 
 // Geometry
 
-static inline MD2_Vec2 vec_make(MD2_Point2 p_from, MD2_Point2 p_to);
+static inline MD2_Point2 point_translated(MD2_Point2 p, MD2_Vec2 delta)
+{
+  return (MD2_Point2){.x = p.x + delta.x, .y = p.y + delta.y};
+}
+
+static inline MD2_Vec2 vec_from_to(MD2_Point2 p_from, MD2_Point2 p_to);
 
 static inline float sqdistance2(MD2_Point2 a, MD2_Point2 b)
 {
-  MD2_Vec2 vec = vec_make(a, b);
+  MD2_Vec2 vec = vec_from_to(a, b);
   return vec.x * vec.x + vec.y * vec.y;
 }
 
-static inline MD2_Vec2 to_point_from_origin(MD2_Point2 a)
+static inline MD2_Vec2 vec_to_point(MD2_Point2 a)
 {
   return (MD2_Vec2){a.x, a.y};
 }
 
-static inline MD2_Vec2 vec_make(MD2_Point2 p_from, MD2_Point2 p_to)
+static inline MD2_Vec2 vec_from_to(MD2_Point2 p_from, MD2_Point2 p_to)
 {
   return (MD2_Vec2){p_to.x - p_from.x, p_to.y - p_from.y};
 }
 
-static inline MD2_Vec2 vec_add(MD2_Vec2 a, MD2_Vec2 b)
+static inline MD2_Vec2 vec_added(MD2_Vec2 a, MD2_Vec2 b)
 {
   return (MD2_Vec2){a.x + b.x, a.y + b.y};
 }
 
-static inline MD2_Rect2 rect_make(MD2_Point2 a, MD2_Point2 b)
+static inline MD2_Rect2 rect_from_corners(MD2_Point2 a, MD2_Point2 b)
 {
   return (MD2_Rect2){.x0 = min_f(a.x, b.x),
                      .x1 = max_f(a.x, b.x),
@@ -143,7 +152,7 @@ static inline MD2_Rect2 rect_make(MD2_Point2 a, MD2_Point2 b)
                      .y1 = max_f(a.y, b.y)};
 }
 
-static inline MD2_Rect2 rect_make_valid(MD2_Rect2 a)
+static inline MD2_Rect2 rect_made_valid(MD2_Rect2 a)
 {
   if (a.x0 > a.x1)
     a.x0 = a.x1;
@@ -152,12 +161,12 @@ static inline MD2_Rect2 rect_make_valid(MD2_Rect2 a)
   return a;
 }
 
-static inline MD2_Rect2 rect_make_point_size(MD2_Point2 point, MD2_Vec2 size)
+static inline MD2_Rect2 rect_from_point_size(MD2_Point2 point, MD2_Vec2 size)
 {
-  return rect_make(point, (MD2_Point2){point.x + size.x, point.y + size.y});
+  return rect_from_corners(point, (MD2_Point2){point.x + size.x, point.y + size.y});
 }
 
-static inline MD2_Rect2 rect_translate(MD2_Rect2 rect, MD2_Vec2 delta)
+static inline MD2_Rect2 rect_translated(MD2_Rect2 rect, MD2_Vec2 delta)
 {
   rect.x0 += delta.x;
   rect.x1 += delta.x;
@@ -168,13 +177,13 @@ static inline MD2_Rect2 rect_translate(MD2_Rect2 rect, MD2_Vec2 delta)
 
 
 // @todo translated/expanded and the likes is a better name for things which aren't action
-static inline MD2_Rect2 rect_expand(MD2_Rect2 rect, MD2_Vec2 margin)
+static inline MD2_Rect2 rect_expanded(MD2_Rect2 rect, MD2_Vec2 margin)
 {
   rect.x0 -= margin.x;
   rect.x1 += margin.x;
   rect.y0 -= margin.y;
   rect.y1 += margin.y;
-  return rect_make_valid(rect);
+  return rect_made_valid(rect);
 }
 
 static inline MD2_Point2 rect_min_point(MD2_Rect2 aabb2)
@@ -189,8 +198,8 @@ static inline MD2_Point2 rect_max_point(MD2_Rect2 aabb2)
 
 static inline MD2_Rect2 rect_intersection(MD2_Rect2 a, MD2_Rect2 b)
 {
-  return rect_make((MD2_Point2){max_f(a.x0, b.x0), max_f(a.y0, b.y0)},
-                   (MD2_Point2){min_f(a.x1, b.x1), min_f(a.y1, b.y1)});
+  return rect_from_corners((MD2_Point2){max_f(a.x0, b.x0), max_f(a.y0, b.y0)},
+                           (MD2_Point2){min_f(a.x1, b.x1), min_f(a.y1, b.y1)});
 }
 
 static inline bool rect_intersects(MD2_Rect2 aabb2, MD2_Point2 point)
@@ -228,7 +237,7 @@ static inline MD2_Rect2 rect_cover_unit()
   };
 }
 
-static inline MD2_Rect2 rect_cover_point(MD2_Rect2 aabb2, MD2_Point2 point)
+static inline MD2_Rect2 rect_covering_point(MD2_Rect2 aabb2, MD2_Point2 point)
 {
   return (MD2_Rect2){
     .x0 = min_f(aabb2.x0, point.x),
@@ -238,7 +247,7 @@ static inline MD2_Rect2 rect_cover_point(MD2_Rect2 aabb2, MD2_Point2 point)
   };
 }
 
-static inline MD2_Rect2 rect_cover(MD2_Rect2 a, MD2_Rect2 b)
+static inline MD2_Rect2 rect_covering(MD2_Rect2 a, MD2_Rect2 b)
 {
   return (MD2_Rect2){
     .x0 = min_f(a.x0, b.x0),
