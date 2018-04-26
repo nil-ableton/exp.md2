@@ -13,12 +13,12 @@ static inline float max_f(float a, float b)
   return a < b ? b : a;
 }
 
-static inline float min_f_unit()
+static inline float min_f_unit(void)
 {
   return FLT_MAX;
 }
 
-static inline float max_f_unit()
+static inline float max_f_unit(void)
 {
   return FLT_MIN;
 }

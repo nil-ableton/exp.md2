@@ -18,7 +18,7 @@ void map_grow(Map* map, size_t size);
 void map_free(Map* map);
 
 // returns value at key
-void* map_get(Map* map, uint64_t key);
+void* map_get(Map const* map, uint64_t key);
 
 // grows the map if necessary
 void map_put(Map* map, uint64_t key, void* data);

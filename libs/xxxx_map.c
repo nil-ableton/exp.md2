@@ -72,7 +72,7 @@ void map_free(Map* map)
 }
 
 // returns value at key
-void* map_get(Map* map, uint64_t key)
+void* map_get(Map const* map, uint64_t key)
 {
   assert(map->cap >= map->len);
 

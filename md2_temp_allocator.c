@@ -49,3 +49,14 @@ void* temp_calloc(TempAllocator* temp_allocator, size_t n, size_t element_size)
   assert(region->bytes_n - (ptr - region->bytes_f) >= needed_size);
   return ptr;
 }
+
+static inline void* temp_memdup_range(TempAllocator* allocator,
+                                      void const* first,
+                                      void const* last)
+{
+  char const* bytes_f = first;
+  char const* bytes_l = last;
+  void* dst = temp_calloc(allocator, 1, bytes_l - bytes_f);
+  memcpy(dst, bytes_f, bytes_l - bytes_f);
+  return dst;
+}

@@ -16,4 +16,7 @@ typedef struct TempAllocator
 void temp_allocator_free(TempAllocator* temp_allocator);
 void* temp_calloc(TempAllocator* temp_allocator, size_t n, size_t element_size);
 
+void* temp_memdup_range(TempAllocator* allocator, void const* first, void const* last);
+
+
 #endif

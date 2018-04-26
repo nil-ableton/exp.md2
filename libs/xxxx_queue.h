@@ -16,8 +16,6 @@ typedef struct Queue
   void* data[QUEUE_CAPACITY_POT];
   uint32_t writer_index;
   uint32_t reader_index;
-  int debug_writer_n;
-  int debug_reader_n;
 } Queue;
 
 typedef struct QueueWriter

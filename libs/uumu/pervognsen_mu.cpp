@@ -914,6 +914,7 @@ Mu_Bool Mu_LoadImage(const char* filename, Mu_Image* image)
   image->channels = 4;
   uint32_t buffer_size = 4 * width * height;
   image->pixels = (uint8_t*)malloc(buffer_size);
+  if (!image->pixels) goto done;
   uint32_t buffer_stride = 4 * width;
   if (rgba_image_frame->CopyPixels(0, buffer_stride, buffer_size, image->pixels) < 0)
   {

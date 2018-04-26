@@ -144,6 +144,7 @@ static inline MD2_Vec2 vec_added(MD2_Vec2 a, MD2_Vec2 b)
   return (MD2_Vec2){a.x + b.x, a.y + b.y};
 }
 
+// @todo extremities
 static inline MD2_Rect2 rect_from_corners(MD2_Point2 a, MD2_Point2 b)
 {
   return (MD2_Rect2){.x0 = min_f(a.x, b.x),
@@ -227,7 +228,7 @@ static inline bool rects_intersect(MD2_Rect2 a, MD2_Rect2 b)
   return true;
 }
 
-static inline MD2_Rect2 rect_cover_unit()
+static inline MD2_Rect2 rect_cover_unit(void)
 {
   return (MD2_Rect2){
     .x0 = min_f_unit(),
@@ -257,4 +258,23 @@ static inline MD2_Rect2 rect_covering(MD2_Rect2 a, MD2_Rect2 b)
   };
 }
 
+static inline MD2_Rect2 rect_right_abutting_size(MD2_Rect2 first, float size_x)
+{
+  return (MD2_Rect2){
+    .x0 = first.x1,
+    .x1 = first.x1 + size_x,
+    .y0 = first.y0,
+    .y1 = first.y1,
+  };
+}
+
+static inline MD2_Rect2 rect_right_abutting_extremity(MD2_Rect2 first, float x1)
+{
+  return (MD2_Rect2){
+    .x0 = first.x1,
+    .x1 = x1,
+    .y0 = first.y0,
+    .y1 = first.y1,
+  };
+}
 #endif

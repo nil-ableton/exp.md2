@@ -27,34 +27,45 @@ void md2_ui__update_pointer(MD2_Pointer* pointer,
     .y = mu->mouse.position.y / ui->pixel_ratio,
   };
 
-  if (mu->mouse.left_button.pressed)
+  if (!rect_intersects(ui->bounds, pointer->position))
   {
-    if (mu->time.seconds - pointer->last_press_seconds < ui->double_click_max_seconds
-        && sqdistance2(pointer->position, pointer->last_press_position)
-             < ui->drag_gesture_area)
+    pointer->drag.running = false; // we do not support outside drags yet
+  }
+  else
+  {
+    assert(rect_intersects(ui->bounds, pointer->position));
+    if (mu->mouse.left_button.pressed)
     {
-      pointer->double_clicked = true;
+      if (mu->time.seconds - pointer->last_press_seconds < ui->double_click_max_seconds
+          && sqdistance2(pointer->position, pointer->last_press_position)
+               < ui->drag_gesture_area)
+      {
+        pointer->double_clicked = true;
+      }
+      pointer->last_press_position = pointer->position;
+      pointer->last_press_seconds = mu->time.seconds;
     }
-    pointer->last_press_position = pointer->position;
-    pointer->last_press_seconds = mu->time.seconds;
-  }
 
-  if (mu->mouse.left_button.released)
-  {
-    pointer->clicked = true;
-    pointer->last_click_position = pointer->position;
-    pointer->last_click_seconds = pointer->last_press_seconds;
-    pointer->drag.ended = pointer->drag.running ? true : false;
-    pointer->drag.running = false;
-  }
+    if (mu->mouse.left_button.released)
+    {
+      pointer->clicked = pointer->drag.running ? false : true;
+      if (pointer->clicked)
+      {
+        pointer->last_click_position = pointer->position;
+        pointer->last_click_seconds = pointer->last_press_seconds;
+      }
+      pointer->drag.ended = pointer->drag.running ? true : false;
+      pointer->drag.running = false;
+    }
 
-  if (!pointer->double_clicked && !pointer->clicked && mu->mouse.left_button.down
-      && !pointer->drag.running
-      && sqdistance2(pointer->position, pointer->last_press_position)
-           >= ui->drag_gesture_area)
-  {
-    pointer->drag.started = true;
-    pointer->drag.running = true;
+    if (!pointer->double_clicked && !pointer->clicked && mu->mouse.left_button.down
+        && !pointer->drag.running
+        && sqdistance2(pointer->position, pointer->last_press_position)
+             >= ui->drag_gesture_area)
+    {
+      pointer->drag.started = true;
+      pointer->drag.running = true;
+    }
   }
 }
 
@@ -195,7 +206,7 @@ void md2_ui_free(void* ptr)
   free(ptr);
 }
 
-static void test_rect()
+static void test_rect(void)
 {
   MD2_Rect2 rect = rect_cover_unit();
 

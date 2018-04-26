@@ -120,7 +120,7 @@ static DWORD task__worker_thread_run(LPVOID lpParameter)
   return 0;
 }
 
-void task_init()
+void task_init(void)
 {
   assert(!g_task_init);
   mtx_init(&g_tasks_lock);
@@ -134,7 +134,7 @@ void task_init()
                  0 /* dwCreationFlags: thread runs immediately */, NULL /* lpThreadId */);
 }
 
-void task_deinit()
+void task_deinit(void)
 {
   assert(g_task_init);
   g_worker_thread_mustrun = 0;

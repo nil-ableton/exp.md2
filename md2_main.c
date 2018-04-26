@@ -8,9 +8,11 @@
 
 #include "md1_support.h"
 #include "md2_audio.h"
+#include "md2_audioengine.h"
 #include "md2_math.h"
 #include "md2_posix.h"
 #include "md2_temp_allocator.h"
+#include "md2_types.h"
 #include "md2_ui.h"
 #include "md2_win32.h"
 
@@ -251,8 +253,9 @@ typedef struct LoadAudioTask
 {
   bool success;
   char* filename;
-  struct Mu_AudioBuffer audiobuffer;
   WaveformData ui_waveform;
+  MD2_Float2* float_stereo;
+  size_t float_stereo_n;
 } LoadAudioTask;
 
 char* strdup_range(char const* f, size_t n)
@@ -264,9 +267,10 @@ char* strdup_range(char const* f, size_t n)
   return str;
 }
 
-void load_md1_file(LoadAudioTask* load_audio_task)
+void load_audio_file(LoadAudioTask* load_audio_task)
 {
-  bool success = Mu_LoadAudio(load_audio_task->filename, &load_audio_task->audiobuffer);
+  struct Mu_AudioBuffer audiobuffer;
+  bool success = Mu_LoadAudio(load_audio_task->filename, &audiobuffer);
   if (!success)
     return;
 
@@ -274,8 +278,31 @@ void load_md1_file(LoadAudioTask* load_audio_task)
   size_t n = d_waveform->len_pot;
   if (n > 0)
   {
-    audiobuffer_compute_waveform(&load_audio_task->audiobuffer, d_waveform);
+    audiobuffer_compute_waveform(&audiobuffer, d_waveform);
   }
+
+  load_audio_task->float_stereo_n =
+    audiobuffer.samples_count / audiobuffer.format.channels;
+  load_audio_task->float_stereo =
+    calloc(load_audio_task->float_stereo_n, sizeof load_audio_task->float_stereo[0]);
+  {
+    MD2_Float2* d_frame = &load_audio_task->float_stereo[0];
+    for (size_t sample_index = 0; sample_index < audiobuffer.samples_count;
+         sample_index += audiobuffer.format.channels)
+    {
+      d_frame->x = audiobuffer.samples[sample_index] / 32267.0;
+      d_frame->y = d_frame->x;
+      if (audiobuffer.format.channels > 1)
+      {
+        d_frame->y = audiobuffer.samples[sample_index + 1] / 32267.0;
+      }
+      d_frame++;
+    }
+    assert(load_audio_task->float_stereo_n
+           == d_frame - &load_audio_task->float_stereo[0]);
+  }
+
+  free(audiobuffer.samples);
   load_audio_task->success = success;
 }
 
@@ -283,17 +310,6 @@ static inline char* temp_strdup(char const* src, TempAllocator* allocator)
 {
   char* dst = temp_calloc(allocator, strlen(src) + 1, 1);
   strcpy(dst, src);
-  return dst;
-}
-
-static inline void* temp_memdup_range(TempAllocator* allocator,
-                                      void const* first,
-                                      void const* last)
-{
-  char const* bytes_f = first;
-  char const* bytes_l = last;
-  void* dst = temp_calloc(allocator, 1, bytes_l - bytes_f);
-  memcpy(dst, bytes_f, bytes_l - bytes_f);
   return dst;
 }
 
@@ -385,7 +401,7 @@ void md2_ui_region_add(MD2_UIRegion* region, MD2_UIElement element, void const* 
     &region->element_index_by_data, (intptr_t)data, (void*)(uintptr_t)element_index);
 }
 
-MD2_UIElement md2_ui_region_get_element(MD2_UIRegion* region, void const* data)
+MD2_UIElement md2_ui_region_get_element(MD2_UIRegion const* region, void const* data)
 {
   size_t element_index = (size_t)map_get(&region->element_index_by_data, (intptr_t)data);
   return region->elements_buf[element_index];
@@ -581,11 +597,13 @@ void md2_ui_scroller_end(MD2_UserInterface* ui,
 bool md2_ui_scroller_get_element(MD2_UserInterface* ui,
                                  MD2_UIScrollableContent* scroller_data,
                                  MD2_UIElement scroller_element,
-                                 MD2_UIRegion* content,
+                                 MD2_UIRegion const* content,
                                  void const* data,
                                  MD2_UIElement* d_element)
 {
   MD2_UIElement element = md2_ui_region_get_element(content, data);
+  element.rect =
+    rect_translated(element.rect, (MD2_Vec2){-content->bounds.x0, -content->bounds.y0});
   element.rect =
     rect_translated(element.rect, (MD2_Vec2){0.0, -scroller_data->content_top_y});
   element.rect =
@@ -660,9 +678,11 @@ void win32_query_directory(DirectoryListing* listing)
 
   WIN32_FIND_DATAA CurrentFileAttributes;
   HANDLE SearchHandle = FindFirstFileA(query, &CurrentFileAttributes);
-  if (!SearchHandle || ((void*)(intptr_t)(-1)) == SearchHandle) {
+  if (!SearchHandle || ((void*)(intptr_t)(-1)) == SearchHandle)
+  {
     listing->state = DirectoryListing_Error;
-    snprintf(listing->error_buffer, sizeof listing->error_buffer, "Got Win32 error: 0x%x", GetLastError());
+    snprintf(listing->error_buffer, sizeof listing->error_buffer, "Got Win32 error: 0x%x",
+             GetLastError());
     listing->error = listing->error_buffer;
     return;
   }
@@ -1121,8 +1141,290 @@ LoadAudioTask* md2_load_audio_task_start(char const* path, size_t path_n)
     wv->max = calloc(n, sizeof wv->max[0]);
     wv->rms = calloc(n, sizeof wv->rms[0]);
   }
-  task_start(task_create(load_md1_file, task_data));
+  task_start(task_create(load_audio_file, task_data));
   return task_data;
+}
+
+// ui definition
+typedef struct MD2_UIState
+{
+  struct LoadAudioTask** audiofile_tasks;
+  char const* user_library_path;
+} MD2_UIState;
+
+
+void play_preview_clip(MD2_AudioState* audio_state, bool is_playing)
+{
+  audio_state->preview_clip_is_playing = is_playing;
+}
+
+
+MD2_Audio_Float2* to_stereo_frames(MD2_Float2* bytes)
+{
+  return (MD2_Audio_Float2*)bytes;
+}
+
+void set_preview_clip_stereo_data_counted_range(MD2_AudioState* audio_state,
+                                                MD2_Float2* stereo_frames,
+                                                size_t stereo_frames_n,
+                                                enum {PLAY_FORWARDS,
+                                                      PLAY_BACKWARDS} direction)
+{
+  audio_state->preview_clip.stereo_frames = to_stereo_frames(stereo_frames);
+  audio_state->preview_clip.stereo_frames_n = stereo_frames_n;
+  audio_state->preview_clip.phase_increment = 1.0 / stereo_frames_n;
+  if (direction == PLAY_BACKWARDS)
+  {
+    audio_state->preview_clip.phase_increment *= -1;
+  }
+}
+
+bool is_preview_clip(MD2_AudioState* audio_state, MD2_Float2* stereo_frames)
+{
+  return audio_state->preview_clip.stereo_frames == to_stereo_frames(stereo_frames);
+}
+
+void md2_ui_playhead(MD2_UserInterface* ui, MD2_UIElement element, double phase)
+{
+  float playhead_x = element.rect.x0 + phase * (element.rect.x1 - element.rect.x0);
+  MD2_UIElement playhead_element = element;
+  playhead_element.rect =
+    rect_from_corners((MD2_Point2){.x = playhead_x - 10 / 2, .y = element.rect.y0},
+                      (MD2_Point2){.x = playhead_x + 10 / 2, .y = element.rect.y1});
+  md2_ui_rect(ui, playhead_element, nvgRGBA(0, 0, 0, 255));
+}
+
+
+void md2_update(MD2_UserInterface* ui,
+                MD2_UIState* ui_state,
+                MD2_AudioState* audio_state,
+                TempAllocator* perframe_allocator)
+{
+  size_t files_n = buf_len(ui_state->audiofile_tasks);
+  size_t loaded_n = 0;
+  size_t bytes_n = 0;
+  for (LoadAudioTask **task_i = &ui_state->audiofile_tasks[0],
+                     **task_l = &task_i[files_n];
+       task_i < task_l; task_i++)
+  {
+    LoadAudioTask* task = *task_i;
+    if (!task->success)
+      continue;
+    loaded_n++;
+    bytes_n += sizeof(task->float_stereo[0]) * task->float_stereo_n;
+  }
+
+  float small_size_x = 10;
+  float small_size_y = 10;
+  MD2_Rect2 bounds = rect_expanded(ui->bounds, (MD2_Vec2){-small_size_x, -small_size_y});
+  static float col01splitter_percent = 0.33f;
+
+  float row_y = bounds.y0;
+  float splitter_size_x = small_size_x;
+  float col0_x = bounds.x0;
+  float col01splitter_x = col0_x + col01splitter_percent * (bounds.x1 - bounds.x0);
+  float col1_x = col01splitter_x + splitter_size_x;
+
+  NVGcontext* vg = ui->vg;
+
+  nvgFontFace(vg, "fallback");
+  float font_size_y = 16;
+  float line_size_y = font_size_y * 1.10;
+  nvgFontSize(vg, font_size_y);
+  nvgFillColor(vg, nvgRGBA(255, 192, 0, 255));
+  float col_x = col0_x;
+  md2_ui_textf(
+    ui,
+    (MD2_UIElement){.rect = {.x0 = col_x, .x1 = bounds.x1, .y1 = row_y + font_size_y}},
+    "User Library %s%s", ui_state->user_library_path,
+    !posix_is_dir(ui_state->user_library_path) ? " (offline)" : ""),
+    row_y += line_size_y;
+  md2_ui_textf(
+    ui,
+    (MD2_UIElement){.rect = {.x0 = col_x, .x1 = bounds.x1, .y1 = row_y + font_size_y}},
+    "Audiofiles:"),
+    row_y += line_size_y;
+
+  col_x += small_size_x;
+  md2_ui_textf(
+    ui,
+    (MD2_UIElement){.rect = {.x0 = col_x, .x1 = bounds.x1, .y1 = row_y + font_size_y}},
+    "%d / %d", loaded_n, files_n),
+    row_y += line_size_y;
+
+  md2_ui_textf(
+    ui,
+    (MD2_UIElement){.rect = {.x0 = col_x, .x1 = bounds.x1, .y1 = row_y + font_size_y}},
+    "%s bytes", temp_str_nicenumber(bytes_n, perframe_allocator)),
+    row_y += font_size_y;
+  col_x -= small_size_x;
+
+  md2_ui_textf(
+    ui,
+    (MD2_UIElement){.rect = {.x0 = col_x, .x1 = bounds.x1, .y1 = row_y + font_size_y}},
+    "audioengine: sample-rate: %f", audio_state->time.samples_per_second),
+    row_y += line_size_y;
+
+  row_y += small_size_y;
+
+  MD2_Rect2 col0_rect = {
+    .x0 = col0_x,
+    .x1 = col01splitter_x,
+    .y0 = row_y,
+    .y1 = bounds.y1,
+  };
+  MD2_Rect2 splitter_rect = rect_right_abutting_size(col0_rect, splitter_size_x);
+  MD2_Rect2 col1_rect = rect_right_abutting_extremity(splitter_rect, bounds.x1);
+
+  MD2_UIElement directory_listing_element = {
+    .rect = rect_intersection(bounds, col0_rect),
+  };
+  {
+    static MD2_UIScrollableContent file_content = {0};
+    static MD2_UIList file_list_state = {0};
+    static char const* path = NULL;
+    if (!path)
+      path = ui_state->user_library_path;
+    DirectoryListingOperation result = ui_directory_listing(
+      ui, directory_listing_element, &file_list_state, &file_content, path);
+    if (result.next_directory_path)
+    {
+      if (path != ui_state->user_library_path)
+        free(path);
+      path = result.next_directory_path;
+    }
+  }
+
+  MD2_UIElement splitter_element = {
+    .rect = splitter_rect,
+  };
+
+  {
+    static bool splitter_is_dragged = false;
+    static float splitter_x_from_press_point;
+    static float splitter_user_x;
+    md2_ui_rect(ui, splitter_element, nvgRGBA(128, 128, 128, 128));
+    if (rect_intersects(splitter_element.rect, ui->pointer.position))
+    {
+      md2_ui_rect(ui, splitter_element, nvgRGBA(128, 128, 128, 128));
+    }
+    if (ui->pointer.drag.started
+        && rect_intersects(splitter_element.rect, ui->pointer.last_press_position))
+    {
+      splitter_is_dragged = true;
+      splitter_x_from_press_point =
+        splitter_element.rect.x0 - ui->pointer.last_press_position.x;
+    }
+    if (ui->pointer.drag.ended)
+    {
+      splitter_is_dragged = false;
+    }
+    if (ui->pointer.drag.running && splitter_is_dragged)
+    {
+      splitter_user_x = ui->pointer.position.x + splitter_x_from_press_point;
+      col01splitter_percent = max_f(bounds.x0 + 3 * small_size_x,
+                                    min_f(splitter_user_x, bounds.x1 - 3 * small_size_x))
+                              / (bounds.x1 - bounds.x0);
+    }
+  }
+
+  MD2_UIElement scroller_element = {
+    .rect = col1_rect,
+  };
+  {
+    LoadAudioTask const* const* const audiofile_tasks = &ui_state->audiofile_tasks[0];
+    MD2_UIRegion audiofile_list_content = {0};
+    {
+      float row_y = 0.0;
+      md2_ui_region_start(&audiofile_list_content);
+      for (size_t loaded_i = 0; loaded_i < buf_len(audiofile_tasks); loaded_i++)
+      {
+        LoadAudioTask const* task = audiofile_tasks[loaded_i];
+        if (!task->success)
+          continue;
+        row_y += 10.0;
+        md2_ui_region_add(&audiofile_list_content,
+                          (MD2_UIElement){
+                            .rect =
+                              {
+                                .x0 = 0,
+                                .x1 = 800.0,
+                                .y0 = row_y,
+                                .y1 = row_y + 40.0,
+                              },
+                          },
+                          &task->ui_waveform);
+        row_y += 40.0;
+      }
+      md2_ui_region_end(&audiofile_list_content);
+    }
+
+    static MD2_UIScrollableContent audiofile_list = {0};
+
+    md2_ui_rect(ui, scroller_element, nvgRGBA(128, 128, 128, 128));
+    md2_ui_rect(ui, scroller_element, nvgRGBA(160, 160, 160, 128)); // debug
+
+    md2_ui_scroller_start(ui, &audiofile_list, &audiofile_list_content, scroller_element);
+    for (size_t loaded_i = 0; loaded_i < buf_len(audiofile_tasks); loaded_i++)
+    {
+      LoadAudioTask const* task = audiofile_tasks[loaded_i];
+      if (!task->success)
+        continue;
+      MD2_UIElement element;
+      if (md2_ui_scroller_get_element(ui, &audiofile_list, scroller_element,
+                                      &audiofile_list_content, &task->ui_waveform,
+                                      &element))
+      {
+        md2_ui_waveform(ui, element, &task->ui_waveform);
+        if (rect_intersects(element.rect, ui->pointer.last_click_position)
+            && ui->pointer.clicked)
+        {
+          set_preview_clip_stereo_data_counted_range(audio_state, &task->float_stereo[0],
+                                                     task->float_stereo_n,
+                                                     ui->mu->keys[MU_SHIFT].down ? 1 : 0);
+          play_preview_clip(audio_state, true);
+        }
+        if (is_preview_clip(audio_state, &task->float_stereo[0]))
+        {
+          md2_ui_playhead(ui, element, audio_state->preview_clip.phase);
+        }
+      }
+    }
+    md2_ui_scroller_end(ui, &audiofile_list, &audiofile_list_content, scroller_element);
+
+    md2_ui_region_free(&audiofile_list_content);
+
+    if (rect_intersects(scroller_element.rect, ui->pointer.position))
+    {
+      if (ui->pointer.drag.running)
+      {
+        md2_ui_rect(ui, scroller_element, nvgRGBA(128, 128, 128, 128));
+      }
+
+      if (ui->pointer.drag.ended)
+      {
+        FilepathList* filepath_list =
+          map_get(&ui->pointer.drag.payload_by_type, MD2_PayloadType_FilepathList);
+        if (filepath_list)
+        {
+          for (char const **path_i = &filepath_list->paths[0],
+                          **path_l = &path_i[filepath_list->paths_n];
+               path_i < path_l; path_i++)
+          {
+            buf_push(ui_state->audiofile_tasks,
+                     md2_load_audio_task_start(*path_i, strlen(*path_i)));
+          }
+        }
+      }
+    }
+  }
+}
+
+struct MD2_AudioEngine* g_audioengine;
+
+void mu_audiocallback(struct Mu_AudioBuffer* buffer)
+{
+  md2_audioengine_mu_audiocallback(g_audioengine, buffer);
 }
 
 int main(int argc, char const* argv[])
@@ -1182,8 +1484,12 @@ int main(int argc, char const* argv[])
               user_library_path);
   }
 
+  g_audioengine = md2_audioengine_init();
+  assert(g_audioengine);
+
   struct Mu mu = {
     .window.title = "Minidaw2",
+    .audio.callback = mu_audiocallback,
   };
   if (!Mu_Initialize(&mu))
     md2_fatal("Init: %s", mu.error);
@@ -1227,8 +1533,20 @@ int main(int argc, char const* argv[])
 
   bool is_first_frame = true;
   TempAllocator perframe_allocator = {0};
+  MD2_UIState ui_state = {
+    .audiofile_tasks = audiofile_tasks,
+    .user_library_path = user_library_path,
+  };
+  audiofile_tasks = NULL;   // @moved_from
+  user_library_path = NULL; // @moved_from
+
+  MD2_AudioState audio_state = {
+    0,
+  };
+
   while (Mu_Push(&mu), Mu_Pull(&mu))
   {
+
     temp_allocator_free(&perframe_allocator);
     float px_ratio = get_window_metrics(&mu).device_px_per_ref_points;
     ui.pixel_ratio = px_ratio;
@@ -1237,158 +1555,12 @@ int main(int argc, char const* argv[])
     glClearColor(0.5f, 0.0f, 1.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     md2_ui_update(&ui);
-
-    size_t files_n = buf_len(audiofile_tasks);
-    size_t loaded_n = 0;
-    size_t bytes_n = 0;
-    for (LoadAudioTask **task_i = &audiofile_tasks[0], **task_l = &task_i[files_n];
-         task_i < task_l; task_i++)
-    {
-      LoadAudioTask* task = *task_i;
-      if (!task->success)
-        continue;
-      loaded_n++;
-      bytes_n +=
-        task->audiobuffer.samples_count * task->audiobuffer.format.bytes_per_sample;
-    }
-
-    NVGcontext* vg = ui.vg;
-    {
-      nvgFontFace(vg, "fallback");
-      float font_size = 16;
-      nvgFontSize(vg, font_size);
-      nvgFillColor(vg, nvgRGBA(255, 192, 0, 255));
-      float row_y = font_size + 20;
-      float col_x = 20;
-      md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = col_x, .y1 = row_y}},
-                   "User Library %s%s", user_library_path,
-                   !posix_is_dir(user_library_path) ? " (offline)" : ""),
-        row_y += font_size;
-      md2_ui_textf(
-        &ui, (MD2_UIElement){.rect = {.x0 = col_x, .y1 = row_y}}, "Audiofiles:"),
-        row_y += font_size;
-
-      col_x += 10;
-      md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = col_x, .y1 = row_y}}, "%d / %d",
-                   loaded_n, files_n),
-        row_y += font_size;
-
-      md2_ui_textf(&ui, (MD2_UIElement){.rect = {.x0 = col_x, .y1 = row_y}}, "%s bytes",
-                   temp_str_nicenumber(bytes_n, &perframe_allocator)),
-        row_y += font_size;
-      col_x -= 10;
-
-      row_y += 10;
-
-      MD2_Rect2 inner_bounds = rect_expanded(ui.bounds, (MD2_Vec2){-10, -10});
-      MD2_UIElement directory_listing_element = {
-        .rect = rect_intersection(
-          inner_bounds,
-          (MD2_Rect2){
-            .x0 = col_x, .x1 = col_x + 320, .y0 = row_y, .y1 = inner_bounds.y1}),
-      };
-      {
-        static MD2_UIScrollableContent file_content = {0};
-        static MD2_UIList file_list_state = {0};
-        static char const* path = NULL;
-        if (!path)
-          path = user_library_path;
-        DirectoryListingOperation result = ui_directory_listing(
-          &ui, directory_listing_element, &file_list_state, &file_content, path);
-        if (result.next_directory_path)
-        {
-          if (path != user_library_path)
-            free(path);
-          path = result.next_directory_path;
-        }
-      }
-
-      col_x = directory_listing_element.rect.x1 + 10;
-      {
-        MD2_UIRegion audiofile_list_content = {0};
-        {
-          float row_y = 0.0;
-          md2_ui_region_start(&audiofile_list_content);
-          for (size_t loaded_i = 0; loaded_i < buf_len(audiofile_tasks); loaded_i++)
-          {
-            LoadAudioTask* task = audiofile_tasks[loaded_i];
-            if (!task->success)
-              continue;
-            row_y += 10.0;
-            md2_ui_region_add(&audiofile_list_content,
-                              (MD2_UIElement){
-                                .rect =
-                                  {
-                                    .x0 = 0,
-                                    .x1 = 800.0,
-                                    .y0 = row_y,
-                                    .y1 = row_y + 40.0,
-                                  },
-                              },
-                              &task->ui_waveform);
-            row_y += 40.0;
-          }
-          md2_ui_region_end(&audiofile_list_content);
-        }
-
-        static MD2_UIScrollableContent audiofile_list = {0};
-
-        MD2_UIElement scroller_element = {
-          .rect = rect_translate_within(ui.bounds, audiofile_list_content.bounds,
-                                        (MD2_Point2){col_x, row_y}, (MD2_Vec2){10, 10})};
-        scroller_element.rect.x1 = max_f(
-          min_f(scroller_element.rect.x0 + 40, ui.bounds.x1), scroller_element.rect.x1);
-        scroller_element.rect.y1 = ui.bounds.y1 - 10;
-        md2_ui_rect(&ui, scroller_element, nvgRGBA(128, 128, 128, 128));
-        md2_ui_rect(&ui, scroller_element, nvgRGBA(160, 160, 160, 128)); // debug
-
-        md2_ui_scroller_start(
-          &ui, &audiofile_list, &audiofile_list_content, scroller_element);
-        for (size_t loaded_i = 0; loaded_i < buf_len(audiofile_tasks); loaded_i++)
-        {
-          LoadAudioTask* task = audiofile_tasks[loaded_i];
-          if (!task->success)
-            continue;
-          MD2_UIElement element;
-          if (md2_ui_scroller_get_element(&ui, &audiofile_list, scroller_element,
-                                          &audiofile_list_content, &task->ui_waveform,
-                                          &element))
-          {
-            md2_ui_waveform(&ui, element, &task->ui_waveform);
-          }
-        }
-        md2_ui_scroller_end(
-          &ui, &audiofile_list, &audiofile_list_content, scroller_element);
-
-        md2_ui_region_free(&audiofile_list_content);
-
-        if (rect_intersects(scroller_element.rect, ui.pointer.position))
-        {
-          if (ui.pointer.drag.running)
-          {
-            md2_ui_rect(&ui, scroller_element, nvgRGBA(128, 128, 128, 128));
-          }
-
-          if (ui.pointer.drag.ended)
-          {
-            FilepathList* filepath_list =
-              map_get(&ui.pointer.drag.payload_by_type, MD2_PayloadType_FilepathList);
-            if (filepath_list)
-            {
-              for (char const **path_i = &filepath_list->paths[0],
-                              **path_l = &path_i[filepath_list->paths_n];
-                   path_i < path_l; path_i++)
-              {
-                buf_push(
-                  audiofile_tasks, md2_load_audio_task_start(*path_i, strlen(*path_i)));
-              }
-            }
-          }
-        }
-      }
-    }
+    md2_update(&ui, &ui_state, &audio_state, &perframe_allocator);
+    md2_audioengine_update(g_audioengine, &audio_state);
     is_first_frame = false;
   }
+
+  md2_audioengine_deinit(g_audioengine), g_audioengine = NULL;
 
   return 0;
 }

@@ -8,8 +8,8 @@ typedef struct TaskHandle
 
 typedef void(TaskFn)(void* task_data);
 
-void task_init();
-void task_deinit();
+void task_init(void);
+void task_deinit(void);
 
 /* Create a new task and returns its handle. A null handle (all bits to zero)
  * denotes an allocation error. */

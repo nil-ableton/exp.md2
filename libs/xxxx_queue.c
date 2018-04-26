@@ -15,19 +15,15 @@ inline uint32_t modulo_pot_uint32(uint32_t x, uint32_t power_of_two)
 
 void queue_free(Queue* queue)
 {
-  assert(queue->debug_writer_n == 0);
-  assert(queue->debug_reader_n == 0);
 }
 
 void queue_reader_free(QueueReader* queue)
 {
-  queue->queue->debug_reader_n--;
 }
 
 void queue_writer_free(QueueWriter* queue)
 {
   buf_free(queue->writer_buffer);
-  queue->queue->debug_writer_n--;
 }
 
 static bool queue__flush_up_to_n(QueueWriter* writer, uint32_t n)
