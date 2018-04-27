@@ -1,0 +1,402 @@
+// datatypes and serialization of the minidaw1 documents
+
+const MAX_NUM_FIELD = 256;
+
+struct MD1_SerializationInfo
+{
+    tag : char const*;
+    tag_n : uint64;
+    num_fields : int;
+    fields : MD1_FieldInfo[MAX_NUM_FIELD];
+}
+
+struct MD1_FieldInfo
+{
+    name                  : char const*;
+    introduced_in_version : int;
+    removed_in_version    : int;
+    array_size_field_name : char const*;
+    array_tag : char const*;
+    array_tag_n : uint64;
+}
+
+enum MD1_FileVersion
+{
+    MD1_FileVersion_None = 0,
+    MD1_FileVersion_First = 1,
+    MD1_FileVersion_AddClipWarpMode,
+    MD1_FileVersion_AddClipDurationInBars,
+    MD1_FileVersionLast,
+    MD1_FileVersionCurrent = MD1_FileVersionLast - 1,
+}
+
+struct MD1_EntityCatalog
+{
+  songs : MD1_Song*;
+  songs_n : uint64;
+  songtracks : MD1_SongTrack*;
+  songtracks_n : uint64;
+  audioclips : MD1_AudioClip*;
+  audioclips_n : uint64;
+  files : MD1_File*;
+  files_n : uint64;
+}
+var MD1_EntityCatalogSerialization = MD1_SerializationInfo {
+    fields = {
+        { name = "files", introduced_in_version = 1, array_size_field_name = "files_n", array_tag = "XHTP\0\0\0\0", array_tag_n = 8 },
+        { name = "audioclips", introduced_in_version = 1, array_size_field_name = "audioclips_n", array_tag = "XPLC\0\0\0\0", array_tag_n = 8 },
+        { name = "songs", introduced_in_version = 1, array_size_field_name = "songs_n", array_tag = "XGNS\0\0\0\0", array_tag_n = 8 },
+        { name = "songtracks", introduced_in_version = 1, array_size_field_name = "songtracks_n", array_tag = "TRCK\0\0\0\0", array_tag_n = 8 },
+    },
+    num_fields = 4,
+};
+
+struct MD1_Song
+{
+  id                : uint64;
+  audioclip_ids     : uint64*;
+  audioclip_ids_n   : uint64;
+  scene_n           : uint16;
+  audiotracks_ids   : uint64*;
+  audiotracks_ids_n : uint64;
+}
+var MD1_SongSerialization = MD1_SerializationInfo{
+  tag = "SONG\0\0\0\0",
+  tag_n = 8,
+  fields = {
+      { name = "scene_n", introduced_in_version = 1 },
+      { name = "audioclip_ids", introduced_in_version = 1, array_size_field_name = "audioclip_ids_n" },
+      { name = "audiotracks_ids", introduced_in_version = 1, array_size_field_name = "audiotracks_ids_n" },
+  },
+  num_fields = 3,
+};
+
+struct MD1_SongTrack
+{
+  id : uint64;
+  audioclip_id_in_session_slots : uint64*;
+  audioclip_id_in_session_slots_n : uint64;
+  playing_session_slot_index : uint64;
+}
+var MD1_SongTrackSerialization = MD1_SerializationInfo{
+  fields = {
+    { name = "audioclip_id_in_session_slots", introduced_in_version = 1, array_size_field_name = "audioclip_id_in_session_slots_n" },
+    { name = "playing_session_slot_index", introduced_in_version = 1 },
+  },
+  num_fields = 2,
+};
+
+enum MD1_ClipWarpMode {
+  MD1_ClipWarpMode_None = 0,
+  MD1_ClipWarpMode_Repitch = 1,
+}
+
+struct MD1_AudioClip
+{
+  id : uint64;
+  file_id : uint64;
+  clip_warp_mode : uint8;
+  duration_in_bars : float;
+}
+var MD1_AudioClipSerialization = MD1_SerializationInfo{
+  fields = {
+    { name = "file_id", introduced_in_version = 1 },
+    { name = "clip_warp_mode", introduced_in_version = MD1_FileVersion_AddClipWarpMode },
+    { name = "duration_in_bars", introduced_in_version = MD1_FileVersion_AddClipDurationInBars },
+  },
+  num_fields = 3,
+};
+
+struct MD1_File
+{
+  id : uint64;
+  path : char*;
+  path_n : uint64;
+}
+var MD1_FileSerialization = MD1_SerializationInfo {
+  fields = {
+    { name = "path", introduced_in_version = 1, array_size_field_name = "path_n" },
+  },
+  num_fields = 1,
+};
+
+var md1_entityinfos : MD1_SerializationInfo*;
+var num_md1_entityinfos : int;
+
+// @todo I'd like to use notes for this instead. How about getting notes in the type info?
+func init_md1_support() : void {
+  num_md1_entityinfos = num_typeinfos;
+  md1_entityinfos = calloc(num_md1_entityinfos, sizeof(MD1_SerializationInfo));
+
+  md1_entityinfos[typeid_index(typeof(MD1_Song))] = MD1_SongSerialization;
+  md1_entityinfos[typeid_index(typeof(MD1_SongTrack))] = MD1_SongTrackSerialization;
+  md1_entityinfos[typeid_index(typeof(MD1_AudioClip))] = MD1_AudioClipSerialization;
+  md1_entityinfos[typeid_index(typeof(MD1_File))] = MD1_FileSerialization;
+  md1_entityinfos[typeid_index(typeof(MD1_EntityCatalog))] = MD1_EntityCatalogSerialization;
+}
+
+func get_serialization_info(type : typeid) : MD1_SerializationInfo {
+  return md1_entityinfos[typeid_index(type)];
+}
+
+func belongs_to_version(version : int, field_serialization_info : MD1_FieldInfo) : bool {
+  return version >= field_serialization_info.introduced_in_version
+      && (field_serialization_info.removed_in_version == 0
+          || version < field_serialization_info.removed_in_version);
+}
+
+func find_field_info(type : typeid, name : char const*) : TypeFieldInfo {
+  info := get_typeinfo(type);
+  #assert(info.kind == TYPE_STRUCT);
+  for (i := 0; i < info.num_fields; i++) {
+    if (0 == strcmp(info.fields[i].name, name)) {
+      return info.fields[i];
+    }
+  }
+  return {};
+}
+
+#foreign(header = "md2_serialisation.h")
+
+@foreign
+func read_float32(buffer : IOBuffer*, dest : float*) : bool;
+@foreign
+func read_float64(buffer : IOBuffer*, dest : double*) : bool;
+@foreign
+func read_uint64(buffer : IOBuffer*, dest : uint64*) : bool;
+@foreign
+func read_uint16(buffer : IOBuffer*, dest : uint16*) : bool;
+@foreign
+func read_uint8(buffer : IOBuffer*, dest : uint8*) : bool;
+
+func read_primitive_type(buffer : IOBuffer*, type : typeid, dest_ptr : void*) : bool {
+  switch (type) {
+    case typeof(uint64): {
+        return read_uint64(buffer, dest_ptr);
+    }
+    case typeof(uint16): {
+        return read_uint16(buffer, dest_ptr);
+    }
+    case typeof(uint8): {
+        return read_uint8(buffer, dest_ptr);
+    }
+    case typeof(int8): {
+        return read_uint8(buffer, dest_ptr);
+    }
+    case typeof(char): {
+        return read_uint8(buffer, dest_ptr);
+    }
+    case typeof(float): {
+        return read_float32(buffer, dest_ptr);
+    }
+    case typeof(double): {
+        return read_float64(buffer, dest_ptr);
+    }
+}
+  return false;
+}
+
+func get_array_counter_generic(size : Any, d_n : uint64*) : bool {
+  switch(size.type) {
+    case typeof(uint64): {
+      *(d_n) = *((:uint64*)size.ptr);
+      return true;
+    }
+  }
+  return false;
+}
+
+func set_array_counter_generic(counter : uint64, d_size : Any) : bool {
+  switch(d_size.type) {
+    case typeof(uint64): {
+      *((:uint64*)d_size.ptr) = counter;
+      return true;
+    }
+  }
+  return false;
+}
+
+func get_id_fieldinfo(element_type : typeid) : TypeFieldInfo {
+  typeinfo := get_typeinfo(element_type);
+  for (field_i:= 0; field_i < typeinfo.num_fields; field_i++) {
+    fieldinfo := typeinfo.fields[field_i];
+    if (0 == strcmp(fieldinfo.name, "id")) {
+      return fieldinfo;
+    }
+  }
+  return {};
+}
+
+func read_array(version : int, buffer : IOBuffer*, dest_ptr : Any, dest_size : Any) : bool {
+    if (!read_primitive_type(buffer, dest_size.type, dest_size.ptr)) {
+      return false;
+    }
+    n : uint64;
+    if (!get_array_counter_generic(dest_size, &n)) {
+      return false;
+    }
+    element_ptr_typeinfo := get_typeinfo(dest_ptr.type);
+    if (element_ptr_typeinfo.kind != TYPE_PTR) {
+      return false;
+    }
+    element_type := element_ptr_typeinfo.base;
+    d_bytes_i := (:uint8*)calloc(n, typeid_size(element_type));
+    *((:void**)dest_ptr.ptr) = (:void*)d_bytes_i;
+    id_fieldinfo := get_id_fieldinfo(element_type);
+    for (i := 0; i < n; i++) {
+      dest_element := Any {
+        ptr = d_bytes_i,
+        type = element_type,
+      };
+      if (!read_entity(version, buffer, dest_element)) {
+        return false;
+      }
+      if (id_fieldinfo.name) {
+        set_array_counter_generic(
+          1 + i,
+          { type = id_fieldinfo.type, ptr = (((:uint8*)dest_element.ptr) + id_fieldinfo.offset) });
+      }
+      d_bytes_i += typeid_size(element_type);
+    }
+    return true;
+}
+
+func read_entity(version : int, buffer : IOBuffer*, dest : Any) : bool {
+  if (read_primitive_type(buffer, dest.type, dest.ptr)) {
+    return true;
+  }
+  #assert(typeid_index(dest.type) < num_md1_entityinfos);
+  serialization_info := get_serialization_info(dest.type);
+  if (serialization_info.num_fields == 0) { return false; }
+
+  if (serialization_info.tag && serialization_info.tag_n) {
+      if (!expect_str_n(buffer, serialization_info.tag, serialization_info.tag_n)) {
+          return false;
+      }
+  }
+
+  for (field_i := 0; field_i < serialization_info.num_fields; field_i++) {
+    field_serialization_info := serialization_info.fields[field_i];
+    if (!belongs_to_version(version, field_serialization_info)) {
+      continue;
+    }
+    dest_field_info := find_field_info(dest.type, field_serialization_info.name);
+    if (!dest_field_info.name) {
+      return false; // could not find field in destination entity!
+    }
+    dest_field := Any{
+      ptr = (:uint8*)dest.ptr + dest_field_info.offset, type = dest_field_info.type
+    };
+    if (read_primitive_type(buffer, dest_field.type, dest_field.ptr)) {
+      continue;
+    }
+	if (field_serialization_info.array_size_field_name) {
+      dest_ptr_field := dest_field;
+      size_field_info := find_field_info(dest.type, field_serialization_info.array_size_field_name);
+      if (!size_field_info.name) {
+        return false;
+      }
+      dest_size_field := Any{
+        ptr = (:uint8*)dest.ptr + size_field_info.offset, type = size_field_info.type
+      };
+      if (field_serialization_info.array_tag && field_serialization_info.array_tag_n) {
+          if (!expect_str_n(buffer, field_serialization_info.array_tag, field_serialization_info.array_tag_n)) {
+              return false; // bad tag
+          }
+      }
+      if (!read_array(version, buffer, dest_ptr_field, dest_size_field)) {
+        return false; // unparseable array
+      }
+      continue;
+    } else if (!read_entity(version, buffer, dest_field)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+@foreign
+func read_uint8_n(in : IOBuffer*, dest : uint8*, n : uint64) : bool;
+
+
+func expect_str_n(buffer : IOBuffer*, str : char const*, str_n : uint64) : bool {
+    data := (:uint8*)calloc(str_n, 1);
+    if (!read_uint8_n(buffer, data, str_n)) {
+        return false;
+    }
+    success := memcmp(data, str, str_n) == 0;
+    free(data);
+    return success;
+}
+
+func md1_load(buffer : IOBuffer*, dest : MD1_EntityCatalog*) : bool {
+    if (!expect_str_n(buffer, "ABL", 3)) {
+        return false;
+    }
+    if (!expect_str_n(buffer, "MINI", 4)) {
+        return false;
+    }
+    version : uint64;
+    read_uint64(buffer, &version);
+    if (version < MD1_FileVersion_First || version >= MD1_FileVersionLast) {
+        return false;
+    }
+    return read_entity(version, buffer, Any{ptr=dest, type=typeof(*dest)});
+}
+
+func md1_free(catalog : MD1_EntityCatalog*) {
+  free(catalog.songs);
+  catalog.songs = NULL;
+  free(catalog.songtracks);
+  catalog.songs = NULL;
+  free(catalog.audioclips);
+  catalog.songs = NULL;
+  free(catalog.files);
+  catalog.songs = NULL;
+}
+
+
+func test_md1_support() {
+  data : uint8[4096];
+  buffer := iobuffer_from_memory_size(&data[0], sizeof(data));
+  {
+    writer := buffer;
+    memcpy(&writer.bytes_i[0], "SONG\0\0\0\0", 8);
+    writer.bytes_i += 8;
+    writer.bytes_i[0] = 0x5; // scene_n
+    writer.bytes_i += 2;
+    writer.bytes_i[0] = 0x02; // size
+    writer.bytes_i += 8;
+    writer.bytes_i[0] = 0x24; // element 1
+    writer.bytes_i += 8;
+    writer.bytes_i[0] = 0x26; // element 2
+    writer.bytes_i += 8;
+    writer.bytes_i[0] = 0x03; // audiotracks_ids_n
+    writer.bytes_i += 8;
+    writer.bytes_i[0] = 0x11; // ids 1
+    writer.bytes_i += 8;
+    writer.bytes_i[0] = 0x22; // ids 2
+    writer.bytes_i += 8;
+    writer.bytes_i[0] = 0x33; // ids 3
+    writer.bytes_i += 8;
+  }
+  song : MD1_Song;
+  read_entity(1, &buffer, Any{&song, typeof(song)});
+  #assert(song.id == 0x00);
+  #assert(song.audioclip_ids_n == 0x02);
+  #assert(song.audioclip_ids[0] == 0x24);
+  #assert(song.audioclip_ids[1] == 0x26);
+  #assert(song.scene_n == 0x5);
+  #assert(song.audiotracks_ids_n == 0x03);
+  #assert(song.audiotracks_ids[0] == 0x11);
+  #assert(song.audiotracks_ids[1] == 0x22);
+  #assert(song.audiotracks_ids[2] == 0x33);
+
+  {
+      file_buffer := iobuffer_file_reader("test_assets/md1_songs.bin");
+      entities : MD1_EntityCatalog;
+      md1_load(&file_buffer, &entities);
+      iobuffer_file_reader_close(&file_buffer);
+      md1_free(&entities);
+  }
+}

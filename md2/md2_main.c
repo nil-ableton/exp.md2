@@ -81,26 +81,23 @@ int comp_uint64(const void* a_ptr, const void* b_ptr)
   return a < b ? -1 : (a > b ? +1 : 0);
 }
 
-MD1_EntityCatalog md1_song_load(char const* path)
+md2_MD1_EntityCatalog md1_song_load(char const* path)
 {
   IOBuffer reader = iobuffer_file_reader(path);
-  MD1_Loader loader = {
-    .input = &reader,
-  };
-  MD1_EntityCatalog entities = {0};
-  assert(md1_load(&loader, &entities));
+  md2_MD1_EntityCatalog entities = {0};
+  assert(md2_md1_load(&reader, &entities));
   iobuffer_file_reader_close(&reader);
   return entities;
 }
 
 int test_main(int argc, char const* argv[])
 {
-  MD1_EntityCatalog entities = md1_song_load("test_assets/md1_songs.bin");
+  md2_MD1_EntityCatalog entities = md1_song_load("test_assets/md1_songs.bin");
 
   // Print some of the document + do some validation
 
   Map unused_files = {0};
-  for (MD1_File *file_i = &entities.files[0], *file_l = &file_i[entities.files_n];
+  for (md2_MD1_File *file_i = &entities.files[0], *file_l = &file_i[entities.files_n];
        file_i < file_l; file_i++)
   {
     map_put(&unused_files, file_i->id, (void*)((intptr_t)1));
@@ -108,7 +105,7 @@ int test_main(int argc, char const* argv[])
   assert(unused_files.len == entities.files_n);
 
   int indent = 0;
-  for (MD1_Song *song_i = entities.songs, *song_l = &song_i[entities.songs_n];
+  for (md2_MD1_Song *song_i = entities.songs, *song_l = &song_i[entities.songs_n];
        song_i < song_l; song_i++)
   {
     printf_line(indent, "Song {"), indent += 4;
@@ -123,7 +120,7 @@ int test_main(int argc, char const* argv[])
       if (*track_id_i == 0)
         continue;
       printf_line(indent, "Track {"), indent += 4;
-      MD1_SongTrack* track = &entities.songtracks[*track_id_i - 1];
+      md2_MD1_SongTrack* track = &entities.songtracks[*track_id_i - 1];
       assert(track->id == *track_id_i);
       printf_line(indent, "id = %llu,", track->id);
       printf_line(
@@ -139,7 +136,7 @@ int test_main(int argc, char const* argv[])
         if (*clip_id_i == 0)
           continue;
         printf_line(indent, "AudioClip {"), indent += 4;
-        MD1_AudioClip* clip = &entities.audioclips[*clip_id_i - 1];
+        md2_MD1_AudioClip* clip = &entities.audioclips[*clip_id_i - 1];
         assert(clip->id == *clip_id_i);
         printf_line(indent, "id = %llu,", clip->id);
         printf_line(indent, "file_id = %llu,", clip->file_id);
@@ -172,7 +169,7 @@ int test_main(int argc, char const* argv[])
   }
 
   map_free(&unused_files);
-  md1_free(&entities);
+  md2_md1_free(&entities);
 
   return 0;
 }
@@ -1290,7 +1287,7 @@ void md2_update(MD2_UserInterface* ui,
     if (result.next_directory_path)
     {
       if (path != ui_state->user_library_path)
-        free(path);
+        free((char*)path);
       path = result.next_directory_path;
     }
   }
@@ -1427,7 +1424,7 @@ void mu_audiocallback(struct Mu_AudioBuffer* buffer)
   md2_audioengine_mu_audiocallback(g_audioengine, buffer);
 }
 
-int main(int argc, char const* argv[])
+int md2_main(int argc, char const* argv[])
 {
 // @todo @platform{win32}
 #if defined(_WIN32)
@@ -1523,8 +1520,8 @@ int main(int argc, char const* argv[])
   if (md1_song_path[0])
   {
     // @todo @defect @leak
-    MD1_EntityCatalog entities = md1_song_load(md1_song_path);
-    for (MD1_File *file_i = &entities.files[0], *file_l = &file_i[entities.files_n];
+    md2_MD1_EntityCatalog entities = md1_song_load(md1_song_path);
+    for (md2_MD1_File *file_i = &entities.files[0], *file_l = &file_i[entities.files_n];
          file_i < file_l; file_i++)
     {
       buf_push(audiofile_tasks, md2_load_audio_task_start(file_i->path, file_i->path_n));

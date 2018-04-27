@@ -94,6 +94,7 @@ void* map_get(Map const* map, uint64_t key)
 // puts value in hasmapable, returns previous value
 void map_put(Map* map, uint64_t key, void* data)
 {
+  assert(key); // key == 0 is disallowed, as it is the empty entry sentinel
   if (map->cap == 0 || map->cap - map->len < map->len)
   {
     map_grow(map, 1 + 2 * map->cap);

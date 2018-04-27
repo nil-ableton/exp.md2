@@ -21,6 +21,8 @@ typedef struct IOBuffer
 
 IOBufferError iobuffer_refill(struct IOBuffer* x);
 
+IOBuffer iobuffer_from_memory_size(uint8_t* bytes, size_t bytes_n);
+
 IOBuffer iobuffer_file_writer(char const* path);
 void iobuffer_file_writer_close(IOBuffer* iobuffer);
 

@@ -44,7 +44,7 @@ static inline uint64_t hash_bytes(const char* buf, size_t len)
   return x;
 }
 
-uint64_t hash_ptr(void const* ptr)
+static inline uint64_t hash_ptr(void const* ptr)
 {
   return hash_uint64((uintptr_t)ptr);
 }

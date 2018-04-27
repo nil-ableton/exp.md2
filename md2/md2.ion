@@ -1,0 +1,35 @@
+import libc { ... }
+
+func version_string() : char const*
+{
+        return "Hello From Ion";
+}
+
+#foreign(header = "md2_main.h")
+
+@foreign("md2_main")
+func md2_main(argc : int, argv : char**) : int;
+
+func main(argc : int, argv : char**) : int
+{
+  init_md1_support();
+  test_md1_support();
+  printf("%s\n", version_string());
+  return md2_main(argc, argv);
+}
+
+#foreign(source="md2_audio.c")
+#foreign(source="md2_audioengine.c")
+#foreign(source="md2_main.c")
+#foreign(source="md2_posix.c")
+#foreign(source="md2_serialisation.c")
+#foreign(source="md2_temp_allocator.c")
+#foreign(source="md2_ui.c")
+
+#foreign(source="../deps/glad/src/glad.c")
+#foreign(source="../deps/nanovg/src/nanovg.c")
+#foreign(source="../libs/xxxx_buf.c")
+#foreign(source="../libs/xxxx_iobuffer.c")
+#foreign(source="../libs/xxxx_map.c")
+#foreign(source="../libs/xxxx_queue.c")
+#foreign(source="../libs/xxxx_tasks.c")

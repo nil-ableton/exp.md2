@@ -1,0 +1,29 @@
+#foreign(header="../libs/xxxx_iobuffer.h")
+
+enum IOBufferError {
+    IOBufferError_None = 0,
+    IOBufferError_PastTheEnd = 1,
+    IOBufferError_IO = 2,
+}
+
+@foreign("IOBuffer")
+struct IOBuffer
+{
+    bytes_f : uint8*;
+    bytes_i : uint8*;
+    bytes_l : uint8;
+
+    error : IOBufferError;
+    refill_ : func (buffer : IOBuffer*) : IOBufferError;
+}
+
+@foreign
+func iobuffer_from_memory_size(bytes : uint8*, bytes_n : uint64) : IOBuffer;
+
+@foreign
+func iobuffer_file_reader(path : char const*) : IOBuffer;
+
+@foreign
+func iobuffer_file_reader_close(iobuffer : IOBuffer*);
+
+

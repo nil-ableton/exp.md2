@@ -6,11 +6,18 @@
 #if defined(_WIN32)
 #define stat(...) _stat(__VA_ARGS__)
 #define S_IFDIR _S_IFDIR
+
+typedef struct _stat64i32 posix_stat_struct;
+
+#else
+
+typedef struct stat posix_stat_struct;
+
 #endif
 
 bool posix_is_dir(char const* path)
 {
-  struct stat result;
+  posix_stat_struct result;
   if (0 != stat(path, &result))
   {
     return false;

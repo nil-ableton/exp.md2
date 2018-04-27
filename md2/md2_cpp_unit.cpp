@@ -4,7 +4,7 @@
 
 #if defined(_WIN32)
 #define MU_D3D11_ENABLED 0
-#include "libs/uumu/pervognsen_mu.cpp"
+#include "../libs/uumu/pervognsen_mu.cpp"
 
 // needed by pervognsen_mu
 #pragma comment(lib, "gdi32.lib")

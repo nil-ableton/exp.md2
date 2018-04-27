@@ -5,5 +5,6 @@ static void md2_exit_with_message(char const* fmt, ...);
 
 #define md2_fatal(...) assert(0), md2_exit_with_message(__VA_ARGS__)
 
+int md2_main(int argc, char const** argv);
 
 #endif

@@ -37,6 +37,23 @@ enum IOBufferError iobuffer_refill(IOBuffer* x)
   return x->refill_(x);
 }
 
+IOBUFFER_INTERNAL enum IOBufferError iobuffer_memory_range_refill(IOBuffer *x)
+{
+    return iobuffer_fail(x, IOBufferError_PastTheEnd);
+}
+
+IOBuffer iobuffer_from_memory_size(uint8_t* bytes, size_t bytes_n)
+{
+    IOBuffer buffer = {
+        .bytes_f = &bytes[0],
+        .bytes_l = &bytes[bytes_n],
+    };
+    buffer.bytes_i = buffer.bytes_f;
+    buffer.refill_ = iobuffer_memory_range_refill;
+    return buffer;
+}
+
+
 struct FileIOBuffer
 {
   FILE* file;

@@ -30,6 +30,7 @@ void md2_ui__update_pointer(MD2_Pointer* pointer,
   if (!rect_intersects(ui->bounds, pointer->position))
   {
     pointer->drag.running = false; // we do not support outside drags yet
+    pointer->drag.ended = true;
   }
   else
   {
@@ -85,13 +86,12 @@ void md2_ui_update(MD2_UserInterface* ui)
   struct Mu* mu = ui->mu;
   ui->size = (MD2_Vec2){
     .x = mu->window.size.x / ui->pixel_ratio, .y = mu->window.size.y / ui->pixel_ratio};
+  ui->bounds = rect_from_point_size((MD2_Point2){0, 0}, ui->size);
   md2_ui__update_pointer(&ui->pointer, ui, mu);
 
   nvgBeginFrame(ui->overlay_vg, ui->size.x, ui->size.y, ui->pixel_ratio);
   nvgBeginFrame(ui->vg, ui->size.x, ui->size.y, ui->pixel_ratio);
   ui->frame_started = true;
-
-  ui->bounds = rect_from_point_size((MD2_Point2){0, 0}, ui->size);
 }
 
 typedef void(GetBoundsFn)(NVGcontext* vg,
